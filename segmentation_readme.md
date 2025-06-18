@@ -21,7 +21,7 @@ Para luego analizar el impacto en revenue y P&L de diferentes decisiones de pric
 - < 10,000 USD
 - \> 10,000 USD
 
-### Cortes de Gastos con Tarjeta
+### Cortes de Gasto (Tarjeta + Investment)
 - < 1 USD
 - < 10 USD
 - < 100 USD
@@ -34,20 +34,35 @@ Para luego analizar el impacto en revenue y P&L de diferentes decisiones de pric
 
 Para cada segmento mensual se calculan:
 
-1. **cantidad_usuarios_grupo** - Usuarios en el segmento
-2. **balance_promedio** - Balance promedio en eUSD
-3. **cantidad_txs_tarjeta** - Total de transacciones de tarjeta
-4. **valor_tx_promedio** - Ticket promedio de tarjeta
-5. **monto_crypto_investment_promedio** - Inversión crypto promedio
-6. **cantidad_tx_crypto_investment** - Transacciones de inversión
-7. **cash_load_virtual_deposit_promedio** - Depósitos promedio
-8. **cantidad_tx_cash_load_virtual_deposit** - Transacciones de depósito
-9. **withdraw_crypto_promedio** - Retiros crypto promedio
-10. **cantidad_tx_withdraw_crypto** - Transacciones de retiro
-11. **deposit_crypto_promedio** - Depósitos crypto promedio
-12. **cantidad_tx_deposit_crypto** - Transacciones de depósito crypto
-13. **bank_transfer_promedio** - Transferencias bancarias promedio
-14. **cantidad_tx_bank_transfer** - Transacciones bancarias
+1. **usuarios_grupo**
+2. **balance**
+3. **tarjeta_tx_cantidad**
+4. **tarjeta_valor_tx_promedio**
+5. **tarjeta_promedio_usuario**
+6. **investment_buy_tx_cantidad**
+7. **investment_buy_valor_tx_promedio**
+8. **investment_buy_promedio_usuario**
+9. **investment_sell_tx_cantidad**
+10. **investment_sell_valor_tx_promedio**
+11. **investment_sell_promedio_usuario**
+12. **crypto_deposit_tx_cantidad**
+13. **crypto_deposit_valor_tx_promedio**
+14. **crypto_deposit_promedio_usuario**
+15. **crypto_withdraw_tx_cantidad**
+16. **crypto_withdraw_valor_tx_promedio**
+17. **crypto_withdraw_promedio_usuario**
+18. **cash_deposit_tx_cantidad**
+19. **cash_deposit_valor_tx_promedio**
+20. **cash_deposit_promedio_usuario**
+21. **cash_withdraw_tx_cantidad**
+22. **cash_withdraw_valor_tx_promedio**
+23. **cash_withdraw_promedio_usuario**
+24. **fiat_deposit_tx_cantidad**
+25. **fiat_deposit_valor_tx_promedio**
+26. **fiat_deposit_promedio_usuario**
+27. **fiat_withdraw_tx_cantidad**
+28. **fiat_withdraw_valor_tx_promedio**
+29. **fiat_withdraw_promedio_usuario**
 
 ## 🚀 Uso Rápido
 
@@ -59,7 +74,7 @@ pip install pandas numpy matplotlib seaborn
 ### Ejecución por CLI
 ```bash
 python user_segmentation_analyzer.py \
-    --transactions sample_uglycash_subset.csv \
+    --transactions olympus_all_txs.csv \
     --rules Movimientos_por_tipo_y_side___completa_efecto.csv \
     --outdir ./segmentation_outputs
 ```
@@ -70,7 +85,7 @@ from user_segmentation_analyzer import UserSegmentationAnalyzer
 
 # Inicializar
 analyzer = UserSegmentationAnalyzer(
-    transactions_file='sample_uglycash_subset.csv',
+    transactions_file='olympus_all_txs.csv',
     rules_file='Movimientos_por_tipo_y_side___completa_efecto.csv'
 )
 
@@ -101,7 +116,7 @@ analyzer.save_outputs('./outputs')
    - Prepara métricas de transacciones
 
 3. **`group_metrics_calculator.py`**
-   - Calcula las 14 métricas solicitadas por grupo
+   - Calcula las 29 métricas solicitadas por grupo
    - Agrega datos mensualmente
    - Exporta resultados formateados
 
@@ -178,8 +193,8 @@ Ejemplos:
 ### 1. Identificar Segmentos de Alto Valor
 ```python
 high_value = group_metrics[
-    (group_metrics['balance_promedio'] > 1000) |
-    (group_metrics['valor_tx_promedio'] > 100)
+    (group_metrics['balance'] > 1000) |
+    (group_metrics['tarjeta_valor_tx_promedio'] > 100)
 ]
 ```
 
@@ -219,7 +234,9 @@ metrics['nueva_metrica'] = new_metric / unique_users
 
 ## 📝 Notas Importantes
 
-1. **Gastos con tarjeta**: Se identifican por `activity_type='card'` y `side IN ('hold_captured', 'debit')`
+1. **Gasto total (Tarjeta + Investment)**: incluye  
+  `activity_type='card'` (side `hold_captured` / `debit`) **y**  
+  `activity_type='crypto_investment'` (buy y sell).
 
 2. **Balances**: Se calculan aplicando las reglas del CSV, solo para transacciones `status='settled'`
 
