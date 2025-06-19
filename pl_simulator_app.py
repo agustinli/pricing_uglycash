@@ -161,7 +161,14 @@ def main():
 
     # 3. Cálculo -------------------------------------------------------------
     rc_calc = RevenueCostCalculator(data['group_metrics'], data['active_users'], params=params)
-    product_df = rc_calc.calculate_product_level()
+
+    # ----- 3.a REAL DATA up to May-2025 ---------------------------------
+    cutoff_month = '2025-05'
+    product_df_real = rc_calc.calculate_product_level()
+    product_df_real = product_df_real[product_df_real['year_month'] <= cutoff_month]
+
+    # ----- 3.b PROJECTION afterwards ----------------------------------
+    product_df = product_df_real.copy()
 
     # 3.a Add RSR emissions -------------------------------------------
     rsr_path = os.path.join(outputs_dir, 'rsr_emissions.csv')
@@ -177,7 +184,7 @@ def main():
 
     # Proyección futura -------------------------------------------------------
     if proj_months > 0 and growth_rate > 0:
-        last_month = product_df['year_month'].max()
+        last_month = cutoff_month
         product_df = project_growth(product_df, last_month, growth_rate, proj_months)
 
     # Recalcular activo usuarios proyectado ----------------------------------
@@ -198,12 +205,6 @@ def main():
     all_products = sorted(product_df['product'].unique())
     selected_products = st.sidebar.multiselect('Products to include', all_products, default=all_products)
     product_df = product_df[product_df['product'].isin(selected_products)]
-
-    # Cutoff historical data up to 2025-05 ----------------------------
-    cutoff = '2025-05'
-    hist_df = product_df[product_df['year_month'] <= cutoff]
-    future_df = product_df[product_df['year_month'] > cutoff]
-    product_df = pd.concat([hist_df, future_df], ignore_index=True)
 
     # Recalcular P&L agregando revenue & cost
     pl_df = (product_df.groupby('year_month')[['revenue', 'cost']]
@@ -240,7 +241,8 @@ def main():
     st.plotly_chart(fig_cost, use_container_width=True)
 
     st.header('Profit & Loss')
-    fig_pl = px.bar(pl_df, x='year_month', y=['revenue','total_cost','pl'], barmode='group', title='Profit & Loss', labels={'value':'USD','year_month':'Month','variable':''})
+    long_pl = pl_df.melt(id_vars='year_month', value_vars=['revenue','total_cost','Monthly P&L'], var_name='metric', value_name='USD')
+    fig_pl = px.bar(long_pl, x='year_month', y='USD', color='metric', barmode='group', title='Profit & Loss', labels={'year_month':'Month'})
     st.plotly_chart(fig_pl, use_container_width=True)
 
     # Tabla resumen ----------------------------------------------------------
