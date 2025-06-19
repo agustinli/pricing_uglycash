@@ -18,6 +18,7 @@ import plotly.express as px
 from pandas.tseries.offsets import MonthEnd
 
 from revenue_cost_calculator import RevenueCostCalculator
+from tier_engine import assign_tiers, DEFAULT_THRESHOLDS, DEFAULT_REWARD_PARAMS
 
 # ---------------------------------------------------------------------
 # Helpers
@@ -27,7 +28,12 @@ def load_data(outputs_dir: str) -> Dict[str, pd.DataFrame]:
     """Carga DataFrames necesarios desde ``outputs_dir``."""
     group_metrics = pd.read_csv(os.path.join(outputs_dir, 'group_metrics_monthly.csv'))
     active_users = pd.read_csv(os.path.join(outputs_dir, 'active_users_monthly.csv'))
-    return {'group_metrics': group_metrics, 'active_users': active_users}
+    user_segments = pd.read_csv(os.path.join(outputs_dir, 'user_segments_monthly.csv'))
+    return {
+        'group_metrics': group_metrics,
+        'active_users': active_users,
+        'user_segments': user_segments,
+    }
 
 
 def project_growth(df: pd.DataFrame, last_month: str, growth_rate: float, months: int) -> pd.DataFrame:
@@ -129,6 +135,10 @@ def main():
         'RSR': {
             'color': '#9467bd',
             'fields': {}
+        },
+        'Rewards': {
+            'color': '#8c564b',
+            'fields': {}
         }
     }
 
@@ -150,9 +160,29 @@ def main():
     with st.sidebar.expander('Customer Acquisition Cost (CAC)'):
         params['cac_per_user'] = st.number_input('CAC per new active user (USD)', value=default_params['cac_per_user'], step=1.0)
 
+    # Tier parameters --------------------------------------------------
+    st.sidebar.header('Tier system')
+
+    # Thresholds
+    thresholds = DEFAULT_THRESHOLDS.copy()
+    with st.sidebar.expander('Tier thresholds', expanded=False):
+        thresholds['tier2_spend'] = st.number_input('Tier2 min spend (eUSD)', value=thresholds['tier2_spend'], step=10)
+        thresholds['tier3_spend'] = st.number_input('Tier3 min spend', value=thresholds['tier3_spend'], step=10)
+        thresholds['tier4_spend'] = st.number_input('Tier4 min spend', value=thresholds['tier4_spend'], step=10)
+        thresholds['tier2_balance'] = st.number_input('Tier2 min balance', value=thresholds['tier2_balance'], step=10)
+        thresholds['tier3_balance'] = st.number_input('Tier3 min balance', value=thresholds['tier3_balance'], step=10)
+        thresholds['tier4_balance'] = st.number_input('Tier4 min balance', value=thresholds['tier4_balance'], step=10)
+
+    # Rewards params
+    reward_params = DEFAULT_REWARD_PARAMS.copy()
+    with st.sidebar.expander('Tier rewards (%)', expanded=False):
+        for tier in ['tier2', 'tier3', 'tier4']:
+            reward_params[f'{tier}_cashback_pct'] = st.number_input(f'{tier} cashback % of spend', value=reward_params[f'{tier}_cashback_pct'] * 100, step=0.1, format='%0.2f') / 100.0
+            reward_params[f'{tier}_yield_pct'] = st.number_input(f'{tier} extra yield % (<=1k balance)', value=reward_params[f'{tier}_yield_pct'] * 100, step=0.1, format='%0.2f') / 100.0
+
     # Growth assumptions ----------------------------------------------
     st.sidebar.header('Growth projection')
-    growth_rate = st.sidebar.slider('Monthly growth rate after Jun-2025 (%)', 0.0, 20.0, 5.0, 0.5) / 100.0
+    growth_rate = st.sidebar.slider('Monthly growth rate after Jun-2025 (%)', 0.0, 20.0, 16.0, 0.5) / 100.0
     proj_months = st.sidebar.slider('Months to project', 0, 36, 30, 1)
 
     # Extra param: RSR price -----------------------------------------
@@ -160,7 +190,17 @@ def main():
     rsr_price = st.sidebar.number_input('RSR price (USD)', value=0.006345, step=0.0001, format='%f')
 
     # 3. Cálculo -------------------------------------------------------------
-    rc_calc = RevenueCostCalculator(data['group_metrics'], data['active_users'], params=params)
+    # Recalcular tiers y rewards según parámetros seleccionados
+    tiers_df, tier_counts_df, rewards_df_input = assign_tiers(
+        data['user_segments'], thresholds=thresholds, reward_params=reward_params
+    )
+
+    rc_calc = RevenueCostCalculator(
+        data['group_metrics'],
+        active_users_monthly=data['active_users'],
+        rewards_monthly=rewards_df_input,
+        params=params
+    )
 
     # ----- 3.a REAL DATA up to May-2025 ---------------------------------
     cutoff_month = '2025-05'
@@ -187,6 +227,9 @@ def main():
         last_month = cutoff_month
         product_df = project_growth(product_df, last_month, growth_rate, proj_months)
 
+    # Mantener datos desde 2025-01 en adelante
+    product_df = product_df[product_df['year_month'] >= '2025-01']
+
     # Recalcular activo usuarios proyectado ----------------------------------
     active_df = data['active_users'].copy()
     if proj_months > 0 and growth_rate > 0:
@@ -200,6 +243,8 @@ def main():
             new_row['active_users'] = round(last_active['active_users'] * factor)
             proj_rows.append(new_row)
         active_df = pd.concat([active_df, pd.DataFrame(proj_rows)], ignore_index=True)
+
+    active_df = active_df[active_df['year_month'] >= '2025-01']
 
     # Allow filtering products ---------------------------------------
     all_products = sorted(product_df['product'].unique())
@@ -248,6 +293,71 @@ def main():
     # Tabla resumen ----------------------------------------------------------
     st.subheader('P&L summary')
     st.dataframe(pl_df, height=400)
+
+    # -----------------------------------------------------------------
+    # 3.a  Project tier counts beyond historical months ----------------
+    # -----------------------------------------------------------------
+    if proj_months > 0 and growth_rate > 0:
+        last_real_month = tier_counts_df['year_month'].max()
+        base_counts = tier_counts_df[tier_counts_df['year_month'] == last_real_month].copy()
+        base_counts = base_counts[base_counts['tier'] != 'tier1']
+
+        proj_rows = []
+        for n in range(1, proj_months + 1):
+            factor = (1 + growth_rate) ** n
+            target_period = (pd.Period(last_real_month) + n).strftime('%Y-%m')
+            scaled = base_counts.copy()
+            scaled['year_month'] = target_period
+            scaled['users'] = (scaled['users'] * factor).round().astype(int)
+            proj_rows.append(scaled)
+
+        if proj_rows:
+            tier_counts_df = pd.concat([tier_counts_df, *proj_rows], ignore_index=True)
+
+    # --------------------------------------------------------------
+    # Tier chart (now including projected counts) ------------------
+    tier_chart_expander = st.expander('Users by tier evolution', expanded=False)
+    with tier_chart_expander:
+        last_month_proj = product_df['year_month'].max()
+        counts_filtered = tier_counts_df[
+            (tier_counts_df['year_month'] >= '2025-01') &
+            (tier_counts_df['tier'] != 'tier1') &
+            (tier_counts_df['year_month'] <= last_month_proj)
+        ]
+
+        counts_pivot = counts_filtered.pivot(index='year_month', columns='tier', values='users').fillna(0)
+        all_periods = pd.period_range('2025-01', last_month_proj, freq='M').strftime('%Y-%m')
+        counts_pivot = counts_pivot.reindex(all_periods, fill_value=0)
+
+        fig_tier = px.area(counts_pivot, x=counts_pivot.index, y=counts_pivot.columns,
+                           title='Users by Tier', labels={'value': 'Users', 'year_month': 'Month'})
+        st.plotly_chart(fig_tier, use_container_width=True)
+
+    # --- 4.a Product contribution pies (latest month) --------------------
+    latest_month = product_df['year_month'].max()
+    rev_latest = (product_df[product_df['year_month'] == latest_month]
+                    .groupby('product')['revenue'].sum())
+    cost_latest = (product_df[product_df['year_month'] == latest_month]
+                     .groupby('product')['cost'].sum())
+
+    col1, col2 = st.columns(2)
+    with col1:
+        st.subheader(f'Revenue share – {latest_month}')
+        fig_pie_rev = px.pie(values=rev_latest.values, names=rev_latest.index,
+                             title='Share of Revenue', color=rev_latest.index,
+                             color_discrete_map=color_map)
+        fig_pie_rev.update_traces(textposition='inside', textinfo='percent+label')
+        st.plotly_chart(fig_pie_rev, use_container_width=True)
+
+    with col2:
+        st.subheader(f'Cost share – {latest_month}')
+        fig_pie_cost = px.pie(values=cost_latest.values, names=cost_latest.index,
+                              title='Share of Cost', color=cost_latest.index,
+                              color_discrete_map=color_map)
+        fig_pie_cost.update_traces(textposition='inside', textinfo='percent+label')
+        st.plotly_chart(fig_pie_cost, use_container_width=True)
+
+    # --- 4.b Stacked bars & others ----------------------------------------
 
 
 if __name__ == '__main__':

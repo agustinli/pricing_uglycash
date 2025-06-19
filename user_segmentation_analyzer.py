@@ -14,6 +14,7 @@ from datetime import datetime
 from balance_rules_processor import BalanceRulesProcessor
 from monthly_user_segmentation import MonthlyUserSegmentation
 from group_metrics_calculator import GroupMetricsCalculator
+from revenue_cost_calculator import RevenueCostCalculator
 
 
 class UserSegmentationAnalyzer:
@@ -158,7 +159,13 @@ class UserSegmentationAnalyzer:
         # 1. Métricas por grupo
         metrics_path = os.path.join(output_dir, 'group_metrics_monthly.csv')
         self.metrics_calculator.export_metrics_to_csv(self.group_metrics, metrics_path)
-        
+
+        # 1-b. Totales mensuales -------------------------------------------
+        totals = self._calculate_monthly_totals(self.group_metrics)
+        totals_path = os.path.join(output_dir, 'monthly_totals.csv')
+        totals.to_csv(totals_path, index=False)
+        print(f"✓ Totales mensuales guardados en {totals_path}")
+
         # 2. Segmentos de usuarios
         segments_path = os.path.join(output_dir, 'user_segments_monthly.csv')
         self.user_segments.to_csv(segments_path, index=False)
@@ -170,13 +177,58 @@ class UserSegmentationAnalyzer:
         distribution.to_csv(dist_path, index=False)
         print(f"✓ Distribución guardada en {dist_path}")
 
+        # 3-b. Asignación de tiers y recompensas --------------------------
+        try:
+            from tier_engine import DEFAULT_REWARD_PARAMS
+            tiers_df, tier_counts_df, rewards_df = assign_tiers(
+                self.user_segments,
+                reward_params=DEFAULT_REWARD_PARAMS
+            )
+
+            tiers_path = os.path.join(output_dir, 'user_tiers_monthly.csv')
+            tiers_df.to_csv(tiers_path, index=False)
+            print(f"✓ Tiers de usuario guardados en {tiers_path}")
+
+            counts_path = os.path.join(output_dir, 'tier_counts_monthly.csv')
+            tier_counts_df.to_csv(counts_path, index=False)
+            print(f"✓ Conteo de tiers guardado en {counts_path}")
+
+            rewards_path = os.path.join(output_dir, 'rewards_skeleton.csv')
+            rewards_df.to_csv(rewards_path, index=False)
+            print(f"✓ Skeleton de rewards guardado en {rewards_path}")
+
+            # almacenar para visualizaciones posteriores
+            self.tier_counts_df = tier_counts_df
+        except ImportError:
+            print("Advertencia: tier_engine no disponible, omitiendo asignación de tiers.")
+
         # 4. Usuarios activos
         if hasattr(self, 'active_users_monthly'):
             active_path = os.path.join(output_dir, 'active_users_monthly.csv')
             self.active_users_monthly.to_csv(active_path, index=False)
             print(f"✓ Usuarios activos guardados en {active_path}")
         
-        # 5. Generar visualizaciones
+        # 5. Revenue & Costos -------------------------------------------
+        # Intentar pasar rewards si disponible
+        rc_rewards_df = rewards_df if 'rewards_df' in locals() else None
+
+        rc_calc = RevenueCostCalculator(
+            self.group_metrics,
+            getattr(self, 'active_users_monthly', None),
+            rc_rewards_df
+        )
+
+        product_df = rc_calc.calculate_product_level()
+        product_path = os.path.join(output_dir, 'revenue_cost_by_product.csv')
+        rc_calc.export_product_metrics(product_df, product_path)
+        print(f"✓ Revenue-cost por producto guardado en {product_path}")
+
+        pl_df = rc_calc.calculate_monthly_pl()
+        pl_path = os.path.join(output_dir, 'company_pl_monthly.csv')
+        rc_calc.export_pl_monthly(pl_df, pl_path)
+        print(f"✓ P&L mensual guardado en {pl_path}")
+
+        # 6. Generar visualizaciones
         self._generate_visualizations(output_dir)
         
     def _generate_visualizations(self, output_dir: str):
@@ -189,7 +241,11 @@ class UserSegmentationAnalyzer:
         # 2. Evolución temporal de segmentos principales
         self._plot_segment_evolution(output_dir)
         
-        # 3. Métricas clave por segmento
+        # 3. Evolución de usuarios por tier
+        if hasattr(self, 'tier_counts_df'):
+            self._plot_tier_evolution(output_dir)
+        
+        # 4. Métricas clave por segmento
         self._plot_key_metrics(output_dir)
         
     def _plot_segment_heatmap(self, output_dir: str):
@@ -255,6 +311,20 @@ class UserSegmentationAnalyzer:
         plt.savefig(os.path.join(output_dir, 'segment_evolution.png'), dpi=300, bbox_inches='tight')
         plt.close()
         
+    def _plot_tier_evolution(self, output_dir: str):
+        """Grafica evolución de usuarios por tier."""
+        counts = self.tier_counts_df.copy()
+        counts = counts.pivot(index='year_month', columns='tier', values='users').fillna(0)
+
+        plt.figure(figsize=(14, 7))
+        counts.plot(kind='area', stacked=True, colormap='cubehelix')
+        plt.title('Usuarios por Tier a lo largo del tiempo')
+        plt.xlabel('Mes')
+        plt.ylabel('Usuarios')
+        plt.tight_layout()
+        plt.savefig(os.path.join(output_dir, 'users_by_tier.png'), dpi=300, bbox_inches='tight')
+        plt.close()
+        
     def _plot_key_metrics(self, output_dir: str):
         """Grafica métricas clave por segmento."""
         # Agregar datos por segmento
@@ -315,6 +385,70 @@ class UserSegmentationAnalyzer:
         plt.close()
         
         print("✓ Visualizaciones generadas")
+
+    # ---------------------------------------------------------------------
+    # NUEVO MÉTODO: totales mensuales a partir de group_metrics_monthly
+    # ---------------------------------------------------------------------
+    def _calculate_monthly_totals(self, group_metrics: pd.DataFrame) -> pd.DataFrame:
+        """
+        Genera una tabla agregada (por mes) con los totales solicitados.
+
+        Retorna
+        -------
+        pd.DataFrame con columnas:
+            year_month, total_balance, total_card_spend,
+            total_crypto_investment, total_cash_load_deposit,
+            total_cash_withdraw, total_crypto_deposit,
+            total_fiat_deposit, total_fiat_withdraw
+        """
+        df = group_metrics.copy()
+
+        # — totales por grupo —
+        df['total_balance_group'] = df['usuarios_grupo'] * df['balance']
+        df['total_card_spend_group'] = df['tarjeta_tx_cantidad'] * df['tarjeta_valor_tx_promedio']
+        df['total_crypto_investment_group'] = (
+            df['investment_buy_tx_cantidad'] * df['investment_buy_valor_tx_promedio'] +
+            df['investment_sell_tx_cantidad'] * df['investment_sell_valor_tx_promedio']
+        )
+        df['total_cash_load_deposit_group'] = df['cash_deposit_tx_cantidad'] * df['cash_deposit_valor_tx_promedio']
+        df['total_cash_withdraw_group'] = df['cash_withdraw_tx_cantidad'] * df['cash_withdraw_valor_tx_promedio']
+        df['total_crypto_deposit_group'] = df['crypto_deposit_tx_cantidad'] * df['crypto_deposit_valor_tx_promedio']
+        df['total_crypto_withdraw_group'] = df['crypto_withdraw_tx_cantidad'] * df['crypto_withdraw_valor_tx_promedio']
+        df['total_fiat_deposit_group'] = df['fiat_deposit_tx_cantidad'] * df['fiat_deposit_valor_tx_promedio']
+        df['total_fiat_withdraw_group'] = df['fiat_withdraw_tx_cantidad'] * df['fiat_withdraw_valor_tx_promedio']
+
+        # — agregación por mes —
+        totals = (
+            df.groupby('year_month')
+              .agg({
+                  'total_balance_group': 'sum',
+                  'total_card_spend_group': 'sum',
+                  'total_crypto_investment_group': 'sum',
+                  'total_cash_load_deposit_group': 'sum',
+                  'total_cash_withdraw_group': 'sum',
+                  'total_crypto_deposit_group': 'sum',
+                  'total_crypto_withdraw_group': 'sum',
+                  'total_fiat_deposit_group': 'sum',
+                  'total_fiat_withdraw_group': 'sum',
+              })
+              .reset_index()
+              .rename(columns={
+                  'total_balance_group': 'total_balance',
+                  'total_card_spend_group': 'total_card_spend',
+                  'total_crypto_investment_group': 'total_crypto_investment',
+                  'total_cash_load_deposit_group': 'total_cash_load_deposit',
+                  'total_cash_withdraw_group': 'total_cash_withdraw',
+                  'total_crypto_deposit_group': 'total_crypto_deposit',
+                  'total_crypto_withdraw_group': 'total_crypto_withdraw',
+                  'total_fiat_deposit_group': 'total_fiat_deposit',
+                  'total_fiat_withdraw_group': 'total_fiat_withdraw',
+              })
+        )
+
+        # Redondeo final
+        num_cols = totals.columns.difference(['year_month'])
+        totals[num_cols] = totals[num_cols].round(2)
+        return totals
 
 
 def main():

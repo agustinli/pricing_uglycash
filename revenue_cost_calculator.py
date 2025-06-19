@@ -51,12 +51,23 @@ DEFAULT_PARAMS: Dict[str, float] = {
 }
 
 
+# ---------------------------------------------------------------------------
+# Revenue & Cost Calculator
+# ---------------------------------------------------------------------------
+
+
 class RevenueCostCalculator:
-    """Calcula revenue, costos y P&L mensual de la compañía."""
+    """Calcula revenue, costos y P&L mensual de la compañía.
+
+    Ahora admite un DataFrame opcional ``rewards_monthly`` con las columnas
+    ``year_month`` y ``rewards_usd`` que se incorpora como costo adicional
+    (negativo en P&L).
+    """
 
     def __init__(self,
                  group_metrics: pd.DataFrame,
                  active_users_monthly: Optional[pd.DataFrame] = None,
+                 rewards_monthly: Optional[pd.DataFrame] = None,
                  params: Optional[Dict[str, float]] = None) -> None:
         """Inicializa el calculador.
 
@@ -65,10 +76,13 @@ class RevenueCostCalculator:
         group_metrics : DataFrame resultante de ``GroupMetricsCalculator``.
         active_users_monthly : DataFrame con columnas ``year_month`` y ``active_users``
             para incorporar CAC. Si ``None`` no se considera CAC.
+        rewards_monthly : DataFrame con columnas ``year_month`` y ``rewards_usd``
+            para incorporar rewards. Si ``None`` no se considera rewards.
         params : Optional dictionary of custom parameters.
         """
         self.group_metrics = group_metrics.copy()
         self.active_users_monthly = active_users_monthly
+        self.rewards_monthly = rewards_monthly
 
         self.params = DEFAULT_PARAMS.copy()
         if params:
@@ -161,6 +175,19 @@ class RevenueCostCalculator:
         product_df = pd.concat(product_dfs, ignore_index=True)
         product_df = product_df[['year_month', 'segment', 'product', 'revenue', 'cost']]
         product_df[['revenue', 'cost']] = product_df[['revenue', 'cost']].round(2)
+
+        # Incorporar rewards como producto separado ---------------------
+        if self.rewards_monthly is not None:
+            rew = self.rewards_monthly.copy()
+            rew['year_month'] = rew['year_month'].astype(str)
+            rew_prod = (rew.groupby('year_month')['rewards_usd']
+                           .sum()
+                           .reset_index()
+                           .assign(segment='all', product='rewards')
+                           .rename(columns={'rewards_usd': 'cost'}))
+            rew_prod['revenue'] = 0.0
+            product_df = pd.concat([product_df, rew_prod[['year_month','segment','product','revenue','cost']]], ignore_index=True)
+
         return product_df
 
     # ------------------------------------------------------------------
@@ -189,7 +216,16 @@ class RevenueCostCalculator:
             pl['cac_cost'] = 0
             pl['active_users'] = 0
 
-        pl['total_cost'] = pl['cost'] + pl['cac_cost']
+        # Incorporar rewards si se provee --------------------------------
+        if self.rewards_monthly is not None:
+            rew = self.rewards_monthly.copy()
+            rew['year_month'] = rew['year_month'].astype(str)
+            pl = pl.merge(rew[['year_month', 'rewards_usd']], on='year_month', how='left')
+            pl['rewards_usd'] = pl['rewards_usd'].fillna(0)
+        else:
+            pl['rewards_usd'] = 0
+
+        pl['total_cost'] = pl['cost'] + pl['cac_cost'] + pl['rewards_usd']
         pl['pl'] = pl['revenue'] - pl['total_cost']
         pl['arr'] = pl['pl'] * 12  # Annual run-rate (simple extrapolation)
         pl['arc'] = pl.apply(lambda r: r['pl'] / r['active_users'] if r['active_users'] else 0, axis=1)
@@ -197,7 +233,7 @@ class RevenueCostCalculator:
         # Rentabilidad (% pl / arr) -------------------------------------
         pl['pl_arr'] = pl.apply(lambda r: r['pl'] / r['arr'] if r['arr'] else 0, axis=1)
 
-        cols = ['year_month', 'revenue', 'cost', 'cac_cost', 'total_cost', 'pl', 'arr', 'arc', 'pl_arr']
+        cols = ['year_month', 'revenue', 'cost', 'cac_cost', 'rewards_usd', 'total_cost', 'pl', 'arr', 'arc', 'pl_arr']
         return pl[cols].round(2)
 
     # ------------------------------------------------------------------
