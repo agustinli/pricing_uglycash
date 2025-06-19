@@ -19,8 +19,8 @@ import pandas as pd
 # --- Default parameters (monthly rates unless noted) -----------------
 DEFAULT_PARAMS: Dict[str, float] = {
     # Earn (monthly rates derived from default APY ~3.1%)
-    'earn_rev_pct': 0.0031,
-    'earn_cost_pct': 0.0033,
+    'earn_rev_pct': 0.00307,  # derived from 3.75% APY
+    'earn_cost_pct': 0.00327,  # derived from 4% APY
 
     # Card
     'card_rev_pct': 0.0171,

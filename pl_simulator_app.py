@@ -86,8 +86,8 @@ def main():
         'Earn': {
             'color': '#FF8C00',
             'fields': {
-                'earn_rev_pct': ('Revenue % (APR)', 'pct'),
-                'earn_cost_pct': ('Cost % (APR)', 'pct'),
+                'earn_rev_pct': ('Revenue APY (%)', 'apy'),
+                'earn_cost_pct': ('Cost APY (%)', 'apy'),
             }
         },
         'Card': {
@@ -132,7 +132,11 @@ def main():
         with st.sidebar.expander(f"{product} parameters", expanded=False):
             for key, (label, kind) in cfg['fields'].items():
                 default = default_params[key]
-                if kind == 'pct':
+                if kind == 'apy':
+                    default_apy = (1 + default) ** 12 - 1
+                    apy_val = st.number_input(label, value=round(default_apy * 100, 4), step=0.01, format="%0.2f")
+                    params[key] = (1 + apy_val / 100) ** (1/12) - 1
+                elif kind == 'pct':
                     val_pct = st.number_input(label, value=round(default * 100, 4), step=0.01, format="%0.2f")
                     params[key] = val_pct / 100
                 else:
