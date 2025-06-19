@@ -65,37 +65,87 @@ def project_growth(df: pd.DataFrame, last_month: str, growth_rate: float, months
 # ---------------------------------------------------------------------
 
 def main():
-    st.set_page_config(layout='wide', page_title='🏦 UGLYCASH – P&L Simulator')
-    st.title('🏦 UGLYCASH – P&L Simulator')
+    st.set_page_config(layout='wide', page_title='UGLYCASH – P&L Simulator')
+    st.title('UGLYCASH – P&L Simulator')
 
     # 1. Directorio de outputs ------------------------------------------------
-    outputs_dir = st.sidebar.text_input('📂 Carpeta de outputs', value='segmentation_outputs')
+    outputs_dir = st.sidebar.text_input('Output folder', value='segmentation_outputs')
     if not os.path.isdir(outputs_dir):
-        st.error(f'No se encontró el directorio {outputs_dir}. Genera los outputs primero.')
+        st.error(f'Directory {outputs_dir} not found. Run the analysis first.')
         st.stop()
 
     data = load_data(outputs_dir)
 
     # 2. Parámetros -----------------------------------------------------------
-    st.sidebar.header('⚙️ Parámetros de fees / costos')
+    st.sidebar.header('⚙️ Model parameters')
     default_params = RevenueCostCalculator.get_default_params()
     params: Dict[str, float] = {}
 
-    # Crear sliders dinámicamente
-    for key, default in default_params.items():
-        if key == 'cac_per_user':
-            # cac slider aparte al final
-            continue
-        if 'pct' in key or 'fx' in key:
-            params[key] = st.sidebar.slider(key, min_value=0.0, max_value=default * 3, value=default, step=0.0001, format='%.4f')
-        else:
-            params[key] = st.sidebar.slider(key, min_value=0.0, max_value=default * 3 if default else 10.0, value=default, step=0.01)
+    # --- Product parameter groups ------------------------------------
+    product_groups = {
+        'Earn': {
+            'color': '#FF8C00',
+            'fields': {
+                'earn_rev_pct': ('Revenue % (APR)', 'pct'),
+                'earn_cost_pct': ('Cost % (APR)', 'pct'),
+            }
+        },
+        'Card': {
+            'color': '#1f77b4',
+            'fields': {
+                'card_rev_pct': ('Revenue % of volume', 'pct'),
+                'card_fx_pct': ('FX share % of volume', 'pct'),
+                'card_cost_pct': ('Processing cost % of volume', 'pct'),
+                'card_per_tx_fee': ('Fixed fee per tx (USD)', 'usd'),
+            }
+        },
+        'Investment': {
+            'color': '#FFD700',
+            'fields': {
+                'invest_rev_pct': ('Revenue % of volume', 'pct'),
+                'invest_cost_pct': ('Cost % of volume', 'pct'),
+            }
+        },
+        'Stables': {
+            'color': '#d62728',
+            'fields': {
+                'stables_rev_per_tx': ('Revenue per withdrawal (USD)', 'usd'),
+                'stables_cost_per_tx': ('Cost per withdrawal (USD)', 'usd'),
+            }
+        },
+        'Fiat': {
+            'color': '#2ca02c',
+            'fields': {
+                'fiat_rev_per_tx': ('Revenue per tx (USD)', 'usd'),
+                'fiat_rev_withdraw_pct': ('Revenue % of fiat withdrawal volume', 'pct'),
+                'fiat_cost_cash_dep': ('Cash deposit cost (USD)', 'usd'),
+                'fiat_cost_cash_wdr': ('Cash withdraw cost (USD)', 'usd'),
+                'fiat_cost_fiat_dep': ('Fiat deposit cost (USD)', 'usd'),
+                'fiat_cost_fiat_wdr': ('Fiat withdraw cost (USD)', 'usd'),
+                'fiat_cost_per_volume': ('Cost per volume (USD)', 'usd'),
+                'rails_maintenance_per_user': ('Rails maintenance per user (USD)', 'usd'),
+            }
+        }
+    }
 
-    params['cac_per_user'] = st.sidebar.slider('cac_per_user', min_value=0.0, max_value=default_params['cac_per_user'] * 3, value=default_params['cac_per_user'], step=1.0)
+    for product, cfg in product_groups.items():
+        with st.sidebar.expander(f"{product} parameters", expanded=False):
+            for key, (label, kind) in cfg['fields'].items():
+                default = default_params[key]
+                if kind == 'pct':
+                    val_pct = st.number_input(label, value=round(default * 100, 4), step=0.01, format="%0.2f%%")
+                    params[key] = val_pct / 100
+                else:
+                    params[key] = st.number_input(label, value=default, step=0.01)
 
-    st.sidebar.header('📈 Supuesto de crecimiento')
-    growth_rate = st.sidebar.slider('Tasa mensual de crecimiento post Jun-2025 (%)', 0.0, 20.0, 5.0, 0.5) / 100.0
-    proj_months = st.sidebar.slider('Meses a proyectar', 0, 36, 30, 1)
+    # CAC separately ---------------------------------------------------
+    with st.sidebar.expander('Customer Acquisition Cost (CAC)'):
+        params['cac_per_user'] = st.number_input('CAC per new active user (USD)', value=default_params['cac_per_user'], step=1.0)
+
+    # Growth assumptions ----------------------------------------------
+    st.sidebar.header('Growth projection')
+    growth_rate = st.sidebar.slider('Monthly growth rate after Jun-2025 (%)', 0.0, 20.0, 5.0, 0.5) / 100.0
+    proj_months = st.sidebar.slider('Months to project', 0, 36, 30, 1)
 
     # 3. Cálculo -------------------------------------------------------------
     rc_calc = RevenueCostCalculator(data['group_metrics'], data['active_users'], params=params)
@@ -136,23 +186,26 @@ def main():
     pl_df['arc'] = pl_df.apply(lambda r: r['pl'] / r['active_users'] if r['active_users'] else 0, axis=1)
     pl_df['pl_arr'] = pl_df.apply(lambda r: r['pl'] / r['arr'] if r['arr'] else 0, axis=1)
 
+    # Color mapping for products --------------------------------------
+    color_map = {p.lower(): cfg['color'] for p, cfg in product_groups.items()}
+
     # 4. Visualizaciones ------------------------------------------------------
-    st.header('Revenue por producto')
+    st.header('Revenue by product')
     rev_pivot = product_df.pivot_table(index='year_month', columns='product', values='revenue', aggfunc='sum').fillna(0)
-    fig_rev = px.bar(rev_pivot, x=rev_pivot.index, y=rev_pivot.columns, title='Revenue (stacked)', labels={'value': 'USD', 'year_month': 'Mes'})
+    fig_rev = px.bar(rev_pivot, x=rev_pivot.index, y=rev_pivot.columns, title='Revenue (stacked)', labels={'value': 'USD', 'year_month': 'Month'}, color_discrete_map=color_map)
     st.plotly_chart(fig_rev, use_container_width=True)
 
-    st.header('Costos por producto')
+    st.header('Costs by product')
     cost_pivot = product_df.pivot_table(index='year_month', columns='product', values='cost', aggfunc='sum').fillna(0)
-    fig_cost = px.bar(cost_pivot, x=cost_pivot.index, y=cost_pivot.columns, title='Costos (stacked)', labels={'value': 'USD', 'year_month': 'Mes'})
+    fig_cost = px.bar(cost_pivot, x=cost_pivot.index, y=cost_pivot.columns, title='Costs (stacked)', labels={'value': 'USD', 'year_month': 'Month'}, color_discrete_map=color_map)
     st.plotly_chart(fig_cost, use_container_width=True)
 
-    st.header('P&L')
-    fig_pl = px.line(pl_df, x='year_month', y='pl', title='Profit & Loss', labels={'pl': 'USD', 'year_month': 'Mes'})
+    st.header('Profit & Loss')
+    fig_pl = px.line(pl_df, x='year_month', y='pl', title='Profit & Loss', labels={'pl': 'USD', 'year_month': 'Month'})
     st.plotly_chart(fig_pl, use_container_width=True)
 
     # Tabla resumen ----------------------------------------------------------
-    st.subheader('Resumen P&L')
+    st.subheader('P&L summary')
     st.dataframe(pl_df, height=400)
 
 
