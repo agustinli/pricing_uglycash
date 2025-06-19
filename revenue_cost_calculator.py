@@ -16,11 +16,9 @@ from typing import Optional, Dict
 import pandas as pd
 
 
-# ------------------------------
-# Parámetros por defecto
-# ------------------------------
+# --- Default parameters (monthly rates unless noted) -----------------
 DEFAULT_PARAMS: Dict[str, float] = {
-    # Earn
+    # Earn (monthly rates derived from default APY ~3.1%)
     'earn_rev_pct': 0.0031,
     'earn_cost_pct': 0.0033,
 
@@ -34,7 +32,7 @@ DEFAULT_PARAMS: Dict[str, float] = {
     'invest_rev_pct': 0.01,
     'invest_cost_pct': 0.0022,
 
-    # Stables (retiro crypto)
+    # Stables
     'stables_rev_per_tx': 3.0,
     'stables_cost_per_tx': 0.33,
 
@@ -67,12 +65,11 @@ class RevenueCostCalculator:
         group_metrics : DataFrame resultante de ``GroupMetricsCalculator``.
         active_users_monthly : DataFrame con columnas ``year_month`` y ``active_users``
             para incorporar CAC. Si ``None`` no se considera CAC.
-        params : Diccionario con parámetros configurables. Si ``None``, se usan los parámetros por defecto.
+        params : Optional dictionary of custom parameters.
         """
         self.group_metrics = group_metrics.copy()
         self.active_users_monthly = active_users_monthly
 
-        # Mezclar parámetros
         self.params = DEFAULT_PARAMS.copy()
         if params:
             self.params.update(params)
@@ -136,12 +133,10 @@ class RevenueCostCalculator:
 
         # 5. Fiat on/off -------------------------------------------------
         df['fiat_revenue'] = (
-            self.params['fiat_rev_per_tx'] * (
-                df['cash_deposit_tx_cantidad'] +
-                df['cash_withdraw_tx_cantidad'] +
-                df['fiat_deposit_tx_cantidad'] +
-                df['fiat_withdraw_tx_cantidad']
-            ) +
+            self.params['fiat_rev_per_tx'] * df['cash_deposit_tx_cantidad'] +
+            self.params['fiat_rev_per_tx'] * df['cash_withdraw_tx_cantidad'] +
+            self.params['fiat_rev_per_tx'] * df['fiat_deposit_tx_cantidad'] +
+            self.params['fiat_rev_per_tx'] * df['fiat_withdraw_tx_cantidad'] +
             self.params['fiat_rev_withdraw_pct'] * df['fiat_withdraw_volume']
         )
         df['fiat_cost'] = (
@@ -149,10 +144,9 @@ class RevenueCostCalculator:
             self.params['fiat_cost_cash_wdr'] * df['cash_withdraw_tx_cantidad'] +
             self.params['fiat_cost_fiat_dep'] * df['fiat_deposit_tx_cantidad'] +
             self.params['fiat_cost_fiat_wdr'] * df['fiat_withdraw_tx_cantidad'] +
-            self.params['fiat_cost_per_volume'] * (
-                df['fiat_deposit_volume'] + df['fiat_withdraw_volume']
-            ) +
-            self.params['rails_maintenance_per_user'] * df['usuarios_grupo']
+            self.params['fiat_cost_per_volume'] * df['fiat_deposit_volume'] +
+            self.params['fiat_cost_per_volume'] * df['fiat_withdraw_volume'] +
+            self.params['rails_maintenance_per_user'] * df['usuarios_grupo']  # mantenimiento rails
         )
 
         # Transformar a formato largo -----------------------------------
@@ -219,7 +213,10 @@ class RevenueCostCalculator:
         """Exporta P&L mensual a CSV."""
         pl_df.to_csv(path, index=False)
 
+    # ------------------------------------------------------------------
+    # 4) Static helpers
+    # ------------------------------------------------------------------
     @staticmethod
     def get_default_params() -> Dict[str, float]:
-        """Devuelve una copia de los parámetros por defecto."""
+        """Return a copy of DEFAULT_PARAMS."""
         return DEFAULT_PARAMS.copy() 
