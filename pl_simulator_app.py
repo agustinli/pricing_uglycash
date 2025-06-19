@@ -124,7 +124,11 @@ def main():
                 'fiat_cost_fiat_wdr': ('Fiat withdraw cost (USD)', 'usd'),
                 'fiat_cost_per_volume': ('Cost per volume (USD)', 'usd'),
                 'rails_maintenance_per_user': ('Rails maintenance per user (USD)', 'usd'),
-            }
+            },
+        },
+        'RSR': {
+            'color': '#9467bd',
+            'fields': {}
         }
     }
 
@@ -151,9 +155,25 @@ def main():
     growth_rate = st.sidebar.slider('Monthly growth rate after Jun-2025 (%)', 0.0, 20.0, 5.0, 0.5) / 100.0
     proj_months = st.sidebar.slider('Months to project', 0, 36, 30, 1)
 
+    # Extra param: RSR price -----------------------------------------
+    st.sidebar.header('RSR token')
+    rsr_price = st.sidebar.number_input('RSR price (USD)', value=0.006345, step=0.0001, format='%f')
+
     # 3. Cálculo -------------------------------------------------------------
     rc_calc = RevenueCostCalculator(data['group_metrics'], data['active_users'], params=params)
     product_df = rc_calc.calculate_product_level()
+
+    # 3.a Add RSR emissions -------------------------------------------
+    rsr_path = os.path.join(outputs_dir, 'rsr_emissions.csv')
+    if os.path.exists(rsr_path):
+        rsr_df = pd.read_csv(rsr_path)  # expect columns year_month, rsr_amount (last column)
+        if rsr_df.shape[1] >= 2:
+            rsr_df.columns = ['year_month', 'rsr_units']
+            rsr_df['revenue'] = rsr_df['rsr_units'] * rsr_price
+            rsr_df['cost'] = 0.0
+            rsr_df['product'] = 'rsr'
+            rsr_df['segment'] = 'all'
+            product_df = pd.concat([product_df, rsr_df[['year_month','segment','product','revenue','cost']]], ignore_index=True)
 
     # Proyección futura -------------------------------------------------------
     if proj_months > 0 and growth_rate > 0:
@@ -174,6 +194,17 @@ def main():
             proj_rows.append(new_row)
         active_df = pd.concat([active_df, pd.DataFrame(proj_rows)], ignore_index=True)
 
+    # Allow filtering products ---------------------------------------
+    all_products = sorted(product_df['product'].unique())
+    selected_products = st.sidebar.multiselect('Products to include', all_products, default=all_products)
+    product_df = product_df[product_df['product'].isin(selected_products)]
+
+    # Cutoff historical data up to 2025-05 ----------------------------
+    cutoff = '2025-05'
+    hist_df = product_df[product_df['year_month'] <= cutoff]
+    future_df = product_df[product_df['year_month'] > cutoff]
+    product_df = pd.concat([hist_df, future_df], ignore_index=True)
+
     # Recalcular P&L agregando revenue & cost
     pl_df = (product_df.groupby('year_month')[['revenue', 'cost']]
                        .sum()
@@ -190,6 +221,10 @@ def main():
     pl_df['arc'] = pl_df.apply(lambda r: r['pl'] / r['active_users'] if r['active_users'] else 0, axis=1)
     pl_df['pl_arr'] = pl_df.apply(lambda r: r['pl'] / r['arr'] if r['arr'] else 0, axis=1)
 
+    # Remove unused cols and rename ----------------------------------
+    pl_df.rename(columns={'pl':'Monthly P&L','arr':'Annualized P&L'}, inplace=True)
+    pl_df = pl_df[['year_month','revenue','cost','cac_cost','total_cost','Monthly P&L','Annualized P&L']]
+
     # Color mapping for products --------------------------------------
     color_map = {p.lower(): cfg['color'] for p, cfg in product_groups.items()}
 
@@ -205,7 +240,7 @@ def main():
     st.plotly_chart(fig_cost, use_container_width=True)
 
     st.header('Profit & Loss')
-    fig_pl = px.line(pl_df, x='year_month', y='pl', title='Profit & Loss', labels={'pl': 'USD', 'year_month': 'Month'})
+    fig_pl = px.bar(pl_df, x='year_month', y=['revenue','total_cost','pl'], barmode='group', title='Profit & Loss', labels={'value':'USD','year_month':'Month','variable':''})
     st.plotly_chart(fig_pl, use_container_width=True)
 
     # Tabla resumen ----------------------------------------------------------
