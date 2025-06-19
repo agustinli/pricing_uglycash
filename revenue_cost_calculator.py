@@ -12,8 +12,45 @@ Producto / supuestos de fees y costos:
 CAC: 25 USD por usuario activo mensual (opcional, si se provee active_users_monthly).
 """
 
-from typing import Optional
+from typing import Optional, Dict
 import pandas as pd
+
+
+# ------------------------------
+# Parámetros por defecto
+# ------------------------------
+DEFAULT_PARAMS: Dict[str, float] = {
+    # Earn
+    'earn_rev_pct': 0.0031,
+    'earn_cost_pct': 0.0033,
+
+    # Card
+    'card_rev_pct': 0.0171,
+    'card_fx_pct': 0.01,
+    'card_cost_pct': 0.00447,
+    'card_per_tx_fee': 0.289,
+
+    # Investment
+    'invest_rev_pct': 0.01,
+    'invest_cost_pct': 0.0022,
+
+    # Stables (retiro crypto)
+    'stables_rev_per_tx': 3.0,
+    'stables_cost_per_tx': 0.33,
+
+    # Fiat on/off
+    'fiat_rev_per_tx': 1.0,
+    'fiat_rev_withdraw_pct': 0.0025,
+    'fiat_cost_cash_dep': 0.73,
+    'fiat_cost_cash_wdr': 0.90,
+    'fiat_cost_fiat_dep': 0.50,
+    'fiat_cost_fiat_wdr': 0.50,
+    'fiat_cost_per_volume': 0.0001,
+    'rails_maintenance_per_user': 1.0,
+
+    # CAC
+    'cac_per_user': 25.0,
+}
 
 
 class RevenueCostCalculator:
@@ -21,7 +58,8 @@ class RevenueCostCalculator:
 
     def __init__(self,
                  group_metrics: pd.DataFrame,
-                 active_users_monthly: Optional[pd.DataFrame] = None) -> None:
+                 active_users_monthly: Optional[pd.DataFrame] = None,
+                 params: Optional[Dict[str, float]] = None) -> None:
         """Inicializa el calculador.
 
         Args
@@ -29,9 +67,15 @@ class RevenueCostCalculator:
         group_metrics : DataFrame resultante de ``GroupMetricsCalculator``.
         active_users_monthly : DataFrame con columnas ``year_month`` y ``active_users``
             para incorporar CAC. Si ``None`` no se considera CAC.
+        params : Diccionario con parámetros configurables. Si ``None``, se usan los parámetros por defecto.
         """
         self.group_metrics = group_metrics.copy()
         self.active_users_monthly = active_users_monthly
+
+        # Mezclar parámetros
+        self.params = DEFAULT_PARAMS.copy()
+        if params:
+            self.params.update(params)
 
     # ------------------------------------------------------------------
     # 1) Revenue & Cost por producto-segmento-mes
@@ -67,42 +111,48 @@ class RevenueCostCalculator:
         )
 
         # 1. Earn --------------------------------------------------------
-        df['earn_revenue'] = 0.0031 * df['balance_total']
-        df['earn_cost'] = 0.0033 * df['balance_total']
+        df['earn_revenue'] = self.params['earn_rev_pct'] * df['balance_total']
+        df['earn_cost'] = self.params['earn_cost_pct'] * df['balance_total']
 
         # 2. Card --------------------------------------------------------
         fx_volume = 0.5 * df['card_volume']  # asumimos 50 % lleva FX
-        df['card_revenue'] = 0.0171 * df['card_volume'] + 0.01 * fx_volume
+        df['card_revenue'] = (
+            self.params['card_rev_pct'] * df['card_volume'] +
+            self.params['card_fx_pct'] * fx_volume
+        )
         df['card_cost'] = (
-            0.00447 * df['card_volume'] +
-            0.01 * fx_volume +
-            0.289 * df['tarjeta_tx_cantidad']
+            self.params['card_cost_pct'] * df['card_volume'] +
+            self.params['card_fx_pct'] * fx_volume +
+            self.params['card_per_tx_fee'] * df['tarjeta_tx_cantidad']
         )
 
         # 3. Investment --------------------------------------------------
-        df['investment_revenue'] = 0.01 * df['investment_volume']
-        df['investment_cost'] = 0.0022 * df['investment_volume']
+        df['investment_revenue'] = self.params['invest_rev_pct'] * df['investment_volume']
+        df['investment_cost'] = self.params['invest_cost_pct'] * df['investment_volume']
 
         # 4. Stables (retiros crypto) -----------------------------------
-        df['stables_revenue'] = 3 * df['crypto_withdraw_tx_cantidad']
-        df['stables_cost'] = 0.33 * df['crypto_withdraw_tx_cantidad']
+        df['stables_revenue'] = self.params['stables_rev_per_tx'] * df['crypto_withdraw_tx_cantidad']
+        df['stables_cost'] = self.params['stables_cost_per_tx'] * df['crypto_withdraw_tx_cantidad']
 
         # 5. Fiat on/off -------------------------------------------------
         df['fiat_revenue'] = (
-            1 * df['cash_deposit_tx_cantidad'] +
-            1 * df['cash_withdraw_tx_cantidad'] +
-            1 * df['fiat_deposit_tx_cantidad'] +
-            1 * df['fiat_withdraw_tx_cantidad'] +
-            0.0025 * df['fiat_withdraw_volume']
+            self.params['fiat_rev_per_tx'] * (
+                df['cash_deposit_tx_cantidad'] +
+                df['cash_withdraw_tx_cantidad'] +
+                df['fiat_deposit_tx_cantidad'] +
+                df['fiat_withdraw_tx_cantidad']
+            ) +
+            self.params['fiat_rev_withdraw_pct'] * df['fiat_withdraw_volume']
         )
         df['fiat_cost'] = (
-            0.73 * df['cash_deposit_tx_cantidad'] +
-            0.90 * df['cash_withdraw_tx_cantidad'] +
-            0.50 * df['fiat_deposit_tx_cantidad'] +
-            0.50 * df['fiat_withdraw_tx_cantidad'] +
-            0.0001 * df['fiat_deposit_volume'] +
-            0.0001 * df['fiat_withdraw_volume'] +
-            1 * df['usuarios_grupo']  # mantenimiento rails
+            self.params['fiat_cost_cash_dep'] * df['cash_deposit_tx_cantidad'] +
+            self.params['fiat_cost_cash_wdr'] * df['cash_withdraw_tx_cantidad'] +
+            self.params['fiat_cost_fiat_dep'] * df['fiat_deposit_tx_cantidad'] +
+            self.params['fiat_cost_fiat_wdr'] * df['fiat_withdraw_tx_cantidad'] +
+            self.params['fiat_cost_per_volume'] * (
+                df['fiat_deposit_volume'] + df['fiat_withdraw_volume']
+            ) +
+            self.params['rails_maintenance_per_user'] * df['usuarios_grupo']
         )
 
         # Transformar a formato largo -----------------------------------
@@ -140,7 +190,7 @@ class RevenueCostCalculator:
             pl = pl.sort_values('year_month').reset_index(drop=True)
             pl['new_active_users'] = pl['active_users'].diff().fillna(pl['active_users'])
             pl['new_active_users'] = pl['new_active_users'].clip(lower=0)
-            pl['cac_cost'] = pl['new_active_users'] * 25
+            pl['cac_cost'] = pl['new_active_users'] * self.params['cac_per_user']
         else:
             pl['cac_cost'] = 0
             pl['active_users'] = 0
@@ -167,4 +217,9 @@ class RevenueCostCalculator:
     @staticmethod
     def export_pl_monthly(pl_df: pd.DataFrame, path: str) -> None:
         """Exporta P&L mensual a CSV."""
-        pl_df.to_csv(path, index=False) 
+        pl_df.to_csv(path, index=False)
+
+    @staticmethod
+    def get_default_params() -> Dict[str, float]:
+        """Devuelve una copia de los parámetros por defecto."""
+        return DEFAULT_PARAMS.copy() 
