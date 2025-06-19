@@ -133,7 +133,7 @@ def main():
             for key, (label, kind) in cfg['fields'].items():
                 default = default_params[key]
                 if kind == 'pct':
-                    val_pct = st.number_input(label, value=round(default * 100, 4), step=0.01, format="%0.2f%%")
+                    val_pct = st.number_input(label, value=round(default * 100, 4), step=0.01, format="%0.2f")
                     params[key] = val_pct / 100
                 else:
                     params[key] = st.number_input(label, value=default, step=0.01)
