@@ -211,7 +211,7 @@ class UserSegmentationAnalyzer:
         for col in ['fiat_deposit_count','fiat_withdraw_count']:
             if col not in may_25.columns:
                 may_25[col] = 0
-        if not may_25.empty and 'fiat_deposit_count' in may_25.columns:
+        if not may_25.empty:
             summary = {}
 
             # Depósitos
