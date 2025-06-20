@@ -6,6 +6,7 @@ Aplica las reglas correctas para calcular balances según activity_type y side.
 
 import pandas as pd
 from typing import Dict, Tuple
+import os
 
 
 class BalanceRulesProcessor:
@@ -22,8 +23,16 @@ class BalanceRulesProcessor:
         
     def _load_rules(self):
         """Carga las reglas desde el CSV a un diccionario."""
-        # Leer con delimiter ';'
-        rules_df = pd.read_csv(self.rules_file, delimiter=';')
+        try:
+            rules_df = pd.read_csv(self.rules_file, delimiter=';')
+        except FileNotFoundError:
+            # Intentar fallback a nombre por defecto dentro del proyecto
+            fallback = 'Movimientos_por_tipo_y_side___completa_efecto.csv'
+            if os.path.exists(fallback):
+                print(f"Advertencia: {self.rules_file} no encontrado. Usando {fallback} como fallback.")
+                rules_df = pd.read_csv(fallback, delimiter=';')
+            else:
+                raise
         
         # Crear diccionario de reglas (activity_type, side) -> efecto
         for _, row in rules_df.iterrows():
