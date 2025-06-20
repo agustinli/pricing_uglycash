@@ -15,6 +15,7 @@ from balance_rules_processor import BalanceRulesProcessor
 from monthly_user_segmentation import MonthlyUserSegmentation
 from group_metrics_calculator import GroupMetricsCalculator
 from revenue_cost_calculator import RevenueCostCalculator
+from tier_engine import assign_tiers, DEFAULT_REWARD_PARAMS
 
 
 class UserSegmentationAnalyzer:
@@ -178,29 +179,25 @@ class UserSegmentationAnalyzer:
         print(f"✓ Distribución guardada en {dist_path}")
 
         # 3-b. Asignación de tiers y recompensas --------------------------
-        try:
-            from tier_engine import DEFAULT_REWARD_PARAMS
-            tiers_df, tier_counts_df, rewards_df = assign_tiers(
-                self.user_segments,
-                reward_params=DEFAULT_REWARD_PARAMS
-            )
+        tiers_df, tier_counts_df, rewards_df = assign_tiers(
+            self.user_segments,
+            reward_params=DEFAULT_REWARD_PARAMS
+        )
 
-            tiers_path = os.path.join(output_dir, 'user_tiers_monthly.csv')
-            tiers_df.to_csv(tiers_path, index=False)
-            print(f"✓ Tiers de usuario guardados en {tiers_path}")
+        tiers_path = os.path.join(output_dir, 'user_tiers_monthly.csv')
+        tiers_df.to_csv(tiers_path, index=False)
+        print(f"✓ Tiers de usuario guardados en {tiers_path}")
 
-            counts_path = os.path.join(output_dir, 'tier_counts_monthly.csv')
-            tier_counts_df.to_csv(counts_path, index=False)
-            print(f"✓ Conteo de tiers guardado en {counts_path}")
+        counts_path = os.path.join(output_dir, 'tier_counts_monthly.csv')
+        tier_counts_df.to_csv(counts_path, index=False)
+        print(f"✓ Conteo de tiers guardado en {counts_path}")
 
-            rewards_path = os.path.join(output_dir, 'rewards_skeleton.csv')
-            rewards_df.to_csv(rewards_path, index=False)
-            print(f"✓ Skeleton de rewards guardado en {rewards_path}")
+        rewards_path = os.path.join(output_dir, 'rewards_skeleton.csv')
+        rewards_df.to_csv(rewards_path, index=False)
+        print(f"✓ Skeleton de rewards guardado en {rewards_path}")
 
-            # almacenar para visualizaciones posteriores
-            self.tier_counts_df = tier_counts_df
-        except ImportError:
-            print("Advertencia: tier_engine no disponible, omitiendo asignación de tiers.")
+        # almacenar para visualizaciones posteriores
+        self.tier_counts_df = tier_counts_df
 
         # 4. Usuarios activos
         if hasattr(self, 'active_users_monthly'):
