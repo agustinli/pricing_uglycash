@@ -221,9 +221,12 @@ class UserSegmentationAnalyzer:
             summary['fiat_deposit'] = dep_counts
 
             # Retiros
-            wdr_counts = (may_25.groupby('fiat_withdraw_count')['user_id']
-                               .nunique()
-                               .sort_index())
+            if 'fiat_withdraw_count' in may_25.columns:
+                wdr_counts = (may_25.groupby('fiat_withdraw_count')['user_id']
+                                   .nunique()
+                                   .sort_index())
+            else:
+                wdr_counts = pd.Series(dtype=int)
             summary['fiat_withdraw'] = wdr_counts
 
             # Usuarios con exactamente 1 dep & 1 wdr
