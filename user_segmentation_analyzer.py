@@ -206,7 +206,11 @@ class UserSegmentationAnalyzer:
             print(f"✓ Usuarios activos guardados en {active_path}")
         
         # 4-b. Análisis de transacciones fiat mayo-2025 ----------------------
-        may_25 = self.user_segments[self.user_segments['year_month'] == '2025-05']
+        may_25 = self.user_segments[self.user_segments['year_month'] == '2025-05'].copy()
+        # asegurar columnas existentes
+        for col in ['fiat_deposit_count','fiat_withdraw_count']:
+            if col not in may_25.columns:
+                may_25[col] = 0
         if not may_25.empty and 'fiat_deposit_count' in may_25.columns:
             summary = {}
 
