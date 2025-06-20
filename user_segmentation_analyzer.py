@@ -208,6 +208,41 @@ class UserSegmentationAnalyzer:
             self.active_users_monthly.to_csv(active_path, index=False)
             print(f"✓ Usuarios activos guardados en {active_path}")
         
+        # 4-b. Análisis de transacciones fiat mayo-2025 ----------------------
+        may_25 = self.user_segments[self.user_segments['year_month'] == '2025-05']
+        if not may_25.empty and 'fiat_deposit_count' in may_25.columns:
+            summary = {}
+
+            # Depósitos
+            dep_counts = (may_25.groupby('fiat_deposit_count')['user_id']
+                               .nunique()
+                               .sort_index())
+            summary['fiat_deposit'] = dep_counts
+
+            # Retiros
+            wdr_counts = (may_25.groupby('fiat_withdraw_count')['user_id']
+                               .nunique()
+                               .sort_index())
+            summary['fiat_withdraw'] = wdr_counts
+
+            # Usuarios con exactamente 1 dep & 1 wdr
+            one_one = may_25[(may_25['fiat_deposit_count'] == 1) & (may_25['fiat_withdraw_count'] == 1)]['user_id'].nunique()
+            more_than = may_25[(may_25['fiat_deposit_count'] + may_25['fiat_withdraw_count']) > 2]['user_id'].nunique()
+
+            result_rows = []
+            for tx_n, cnt in dep_counts.items():
+                result_rows.append({'metric':'deposit_tx', 'tx_count': tx_n, 'users': cnt})
+            for tx_n, cnt in wdr_counts.items():
+                result_rows.append({'metric':'withdraw_tx', 'tx_count': tx_n, 'users': cnt})
+
+            result_rows.append({'metric':'1dep1wdr','tx_count':2,'users':one_one})
+            result_rows.append({'metric':'>1dep_or_wdr','tx_count':'>2','users':more_than})
+
+            fiat_summary_df = pd.DataFrame(result_rows)
+            fiat_path = os.path.join(output_dir, 'fiat_tx_summary_may2025.csv')
+            fiat_summary_df.to_csv(fiat_path, index=False)
+            print(f"✓ Resumen fiat mayo-2025 guardado en {fiat_path}")
+
         # 5. Revenue & Costos -------------------------------------------
         # Intentar pasar rewards si disponible
         rc_rewards_df = rewards_df if 'rewards_df' in locals() else None

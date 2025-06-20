@@ -74,6 +74,19 @@ def main():
     st.set_page_config(layout='wide', page_title='UGLYCASH – P&L Simulator')
     st.title('UGLYCASH – P&L Simulator')
 
+    st.markdown(
+        """
+        ### How to read this dashboard
+        * **Revenue by product / Costs by product**: stacked bars showing absolute USD values per month.
+        * **Profit & Loss**: revenue, total cost and monthly P&L grouped bars.
+        * **P&L summary table**: numeric view including CAC and annualized P&L.
+        * **Users by tier evolution**: area chart of users in Tier 2–4 (Tier 1 excluded) including projections.
+        * **Pie charts**: share of revenue and cost for the latest month displayed.
+
+        Adjust the parameters on the sidebar (fees, CAC, growth, tier rules) and the dashboard will update automatically so you can understand the impact on the company economics.
+        """
+    )
+
     # 1. Directorio de outputs ------------------------------------------------
     outputs_dir = st.sidebar.text_input('Output folder', value='segmentation_outputs')
     if not os.path.isdir(outputs_dir):
