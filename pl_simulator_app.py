@@ -95,6 +95,9 @@ def main():
 
     data = load_data(outputs_dir)
 
+    # Toggle Tier system early (used elsewhere)
+    enable_tiers = st.sidebar.checkbox('Enable Tier system', value=False)
+
     # 2. Parámetros -----------------------------------------------------------
     st.sidebar.header('⚙️ Model parameters')
     default_params = RevenueCostCalculator.get_default_params()
@@ -177,8 +180,6 @@ def main():
         params['cac_per_user'] = st.number_input('CAC per new active user (USD)', value=default_params['cac_per_user'], step=1.0)
 
     # Tier parameters --------------------------------------------------
-    enable_tiers = st.sidebar.checkbox('Enable Tier system', value=False)
-
     if enable_tiers:
         st.sidebar.header('Tier system')
 
