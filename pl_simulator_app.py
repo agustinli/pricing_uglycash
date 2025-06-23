@@ -18,7 +18,7 @@ import plotly.express as px
 from pandas.tseries.offsets import MonthEnd
 
 from revenue_cost_calculator import RevenueCostCalculator
-from tier_engine import assign_tiers, DEFAULT_THRESHOLDS, DEFAULT_REWARD_PARAMS
+from tier_engine import DEFAULT_THRESHOLDS, DEFAULT_REWARD_PARAMS
 
 # ---------------------------------------------------------------------
 # Helpers
@@ -149,10 +149,13 @@ def main():
             'color': '#9467bd',
             'fields': {}
         },
-        'Rewards': {
-            'color': '#8c564b',
-            'fields': {}
-        }
+        # Rewards product only if tiers enabled
+        **({
+            'Rewards': {
+                'color': '#8c564b',
+                'fields': {}
+            }
+        } if enable_tiers else {})
     }
 
     for product, cfg in product_groups.items():
@@ -174,24 +177,27 @@ def main():
         params['cac_per_user'] = st.number_input('CAC per new active user (USD)', value=default_params['cac_per_user'], step=1.0)
 
     # Tier parameters --------------------------------------------------
-    st.sidebar.header('Tier system')
+    enable_tiers = st.sidebar.checkbox('Enable Tier system', value=False)
 
-    # Thresholds
-    thresholds = DEFAULT_THRESHOLDS.copy()
-    with st.sidebar.expander('Tier thresholds', expanded=False):
-        thresholds['tier2_spend'] = st.number_input('Tier2 min spend (eUSD)', value=thresholds['tier2_spend'], step=10)
-        thresholds['tier3_spend'] = st.number_input('Tier3 min spend', value=thresholds['tier3_spend'], step=10)
-        thresholds['tier4_spend'] = st.number_input('Tier4 min spend', value=thresholds['tier4_spend'], step=10)
-        thresholds['tier2_balance'] = st.number_input('Tier2 min balance', value=thresholds['tier2_balance'], step=10)
-        thresholds['tier3_balance'] = st.number_input('Tier3 min balance', value=thresholds['tier3_balance'], step=10)
-        thresholds['tier4_balance'] = st.number_input('Tier4 min balance', value=thresholds['tier4_balance'], step=10)
+    if enable_tiers:
+        st.sidebar.header('Tier system')
 
-    # Rewards params
-    reward_params = DEFAULT_REWARD_PARAMS.copy()
-    with st.sidebar.expander('Tier rewards (%)', expanded=False):
-        for tier in ['tier2', 'tier3', 'tier4']:
-            reward_params[f'{tier}_cashback_pct'] = st.number_input(f'{tier} cashback % of spend', value=reward_params[f'{tier}_cashback_pct'] * 100, step=0.1, format='%0.2f') / 100.0
-            reward_params[f'{tier}_yield_pct'] = st.number_input(f'{tier} extra yield % (<=1k balance)', value=reward_params[f'{tier}_yield_pct'] * 100, step=0.1, format='%0.2f') / 100.0
+        # Thresholds
+        thresholds = DEFAULT_THRESHOLDS.copy()
+        with st.sidebar.expander('Tier thresholds', expanded=False):
+            thresholds['tier2_spend'] = st.number_input('Tier2 min spend (eUSD)', value=thresholds['tier2_spend'], step=10)
+            thresholds['tier3_spend'] = st.number_input('Tier3 min spend', value=thresholds['tier3_spend'], step=10)
+            thresholds['tier4_spend'] = st.number_input('Tier4 min spend', value=thresholds['tier4_spend'], step=10)
+            thresholds['tier2_balance'] = st.number_input('Tier2 min balance', value=thresholds['tier2_balance'], step=10)
+            thresholds['tier3_balance'] = st.number_input('Tier3 min balance', value=thresholds['tier3_balance'], step=10)
+            thresholds['tier4_balance'] = st.number_input('Tier4 min balance', value=thresholds['tier4_balance'], step=10)
+
+        # Rewards params
+        reward_params = DEFAULT_REWARD_PARAMS.copy()
+        with st.sidebar.expander('Tier rewards (%)', expanded=False):
+            for tier in ['tier2', 'tier3', 'tier4']:
+                reward_params[f'{tier}_cashback_pct'] = st.number_input(f'{tier} cashback % of spend', value=reward_params[f'{tier}_cashback_pct'] * 100, step=0.1, format='%0.2f') / 100.0
+                reward_params[f'{tier}_yield_pct'] = st.number_input(f'{tier} extra yield % (<=1k balance)', value=reward_params[f'{tier}_yield_pct'] * 100, step=0.1, format='%0.2f') / 100.0
 
     # Growth assumptions ----------------------------------------------
     st.sidebar.header('Growth projection')
@@ -204,9 +210,13 @@ def main():
 
     # 3. Cálculo -------------------------------------------------------------
     # Recalcular tiers y rewards según parámetros seleccionados
-    tiers_df, tier_counts_df, rewards_df_input = assign_tiers(
-        data['user_segments'], thresholds=thresholds, reward_params=reward_params
-    )
+    if enable_tiers:
+        tiers_df, tier_counts_df, rewards_df_input = assign_tiers(
+            data['user_segments'], thresholds=thresholds, reward_params=reward_params
+        )
+    else:
+        tiers_df = tier_counts_df = None
+        rewards_df_input = None
 
     rc_calc = RevenueCostCalculator(
         data['group_metrics'],
@@ -329,22 +339,23 @@ def main():
 
     # --------------------------------------------------------------
     # Tier chart (now including projected counts) ------------------
-    tier_chart_expander = st.expander('Users by tier evolution', expanded=False)
-    with tier_chart_expander:
-        last_month_proj = product_df['year_month'].max()
-        counts_filtered = tier_counts_df[
-            (tier_counts_df['year_month'] >= '2025-01') &
-            (tier_counts_df['tier'] != 'tier1') &
-            (tier_counts_df['year_month'] <= last_month_proj)
-        ]
+    if enable_tiers:
+        tier_chart_expander = st.expander('Users by tier evolution', expanded=False)
+        with tier_chart_expander:
+            last_month_proj = product_df['year_month'].max()
+            counts_filtered = tier_counts_df[
+                (tier_counts_df['year_month'] >= '2025-01') &
+                (tier_counts_df['tier'] != 'tier1') &
+                (tier_counts_df['year_month'] <= last_month_proj)
+            ]
 
-        counts_pivot = counts_filtered.pivot(index='year_month', columns='tier', values='users').fillna(0)
-        all_periods = pd.period_range('2025-01', last_month_proj, freq='M').strftime('%Y-%m')
-        counts_pivot = counts_pivot.reindex(all_periods, fill_value=0)
+            counts_pivot = counts_filtered.pivot(index='year_month', columns='tier', values='users').fillna(0)
+            all_periods = pd.period_range('2025-01', last_month_proj, freq='M').strftime('%Y-%m')
+            counts_pivot = counts_pivot.reindex(all_periods, fill_value=0)
 
-        fig_tier = px.area(counts_pivot, x=counts_pivot.index, y=counts_pivot.columns,
-                           title='Users by Tier', labels={'value': 'Users', 'year_month': 'Month'})
-        st.plotly_chart(fig_tier, use_container_width=True)
+            fig_tier = px.area(counts_pivot, x=counts_pivot.index, y=counts_pivot.columns,
+                               title='Users by Tier', labels={'value': 'Users', 'year_month': 'Month'})
+            st.plotly_chart(fig_tier, use_container_width=True)
 
     # --- 4.a Product contribution pies (latest month) --------------------
     latest_month = product_df['year_month'].max()
