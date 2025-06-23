@@ -321,7 +321,7 @@ def main():
     # -----------------------------------------------------------------
     # 3.a  Project tier counts beyond historical months ----------------
     # -----------------------------------------------------------------
-    if proj_months > 0 and growth_rate > 0:
+    if enable_tiers and tier_counts_df is not None and proj_months > 0 and growth_rate > 0:
         last_real_month = tier_counts_df['year_month'].max()
         base_counts = tier_counts_df[tier_counts_df['year_month'] == last_real_month].copy()
         base_counts = base_counts[base_counts['tier'] != 'tier1']
