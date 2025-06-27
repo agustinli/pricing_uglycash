@@ -1,3 +1,6 @@
 # !Movimientos_por_tipo_y_side___completa_efecto.csv      # incluirlo si lo necesitas
 # !olympus_all_txs.csv                                    # incluirlo si lo necesitas 
 segmentation_outputs/*.csv
+olympus_all_txs*.csv
+tribe.csv
+segmentation_outputs*/

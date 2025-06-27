@@ -37,6 +37,8 @@ class GroupMetricsCalculator:
         13) cash_withdraw: cantidad de transacciones de retiro de cash, valor promedio de transacciones de retiro de cash, valor promedio de retiro de cash por usuario
         14) fiat_deposit: cantidad de transacciones de depósito de virtual + bank_transfer + international_transfer, valor promedio de transacciones de depósito de virtual + bank_transfer + international_transfer, valor promedio de depósito de virtual + bank_transfer + international_transfer por usuario
         15) fiat_withdraw: cantidad de transacciones de retiro de virtual + bank_transfer + international_transfer, valor promedio de transacciones de retiro de virtual + bank_transfer + international_transfer, valor promedio de retiro de virtual + bank_transfer + international_transfer por usuario
+        16) users_with_fiat_dep: número de usuarios con al menos un depósito fiat en el mes
+        17) users_with_crypto_wdr: número de usuarios con al menos un retiro crypto en el mes
         
         Returns:
             DataFrame con todas las métricas por grupo y mes
@@ -84,15 +86,30 @@ class GroupMetricsCalculator:
             
             # 3-4) Métricas de tarjeta
             card_txs = group_data[
-                (group_data['activity_type'] == 'card') &
+                (group_data['activity_type'].isin(['card', 'card_POS', 'card_ATM'])) &
                 (group_data['side'].isin(['hold_captured', 'debit']))
             ]
             
+            atm_txs = card_txs[card_txs['activity_type'] == 'card_ATM']
+            pos_txs = card_txs[card_txs['activity_type'].isin(['card_POS', 'card'])]
+            
             tarjeta_total = abs(card_txs['signed_amount'].sum())
+            atm_total = abs(atm_txs['signed_amount'].sum())
+            pos_total = abs(pos_txs['signed_amount'].sum())
             metrics.update({
                 'tarjeta_tx_cantidad'       : len(card_txs),
                 'tarjeta_valor_tx_promedio' : abs(card_txs['amount'].mean()) if len(card_txs) else 0,
                 'tarjeta_promedio_usuario'  : tarjeta_total / unique_users if unique_users else 0,
+
+                # ATM
+                'atm_tx_cantidad'           : len(atm_txs),
+                'atm_valor_tx_promedio'     : abs(atm_txs['amount'].mean()) if len(atm_txs) else 0,
+                'atm_promedio_usuario'      : atm_total / unique_users if unique_users else 0,
+
+                # POS (incluye sin clasificar)
+                'pos_tx_cantidad'           : len(pos_txs),
+                'pos_valor_tx_promedio'     : abs(pos_txs['amount'].mean()) if len(pos_txs) else 0,
+                'pos_promedio_usuario'      : pos_total / unique_users if unique_users else 0,
             })
             
             # 5-6) Crypto investment
@@ -116,6 +133,10 @@ class GroupMetricsCalculator:
             dep = group_data[group_data['activity_type'] == 'incoming_crypto']
             wdr = group_data[group_data['activity_type'] == 'withdraw_crypto']
             
+            # --- Stable withdrawals buckets (≤100 USD vs >100 USD) ---------
+            small_wdr = wdr[wdr['amount'].abs() <= 100]
+            large_wdr = wdr[wdr['amount'].abs() > 100]
+            
             metrics.update({
                 'crypto_deposit_tx_cantidad'       : len(dep),
                 'crypto_deposit_valor_tx_promedio' : abs(dep['amount'].mean()) if len(dep) else 0,
@@ -124,9 +145,13 @@ class GroupMetricsCalculator:
                 'crypto_withdraw_tx_cantidad'       : len(wdr),
                 'crypto_withdraw_valor_tx_promedio' : abs(wdr['amount'].mean()) if len(wdr) else 0,
                 'crypto_withdraw_promedio_usuario'  : abs(wdr['signed_amount'].sum()) / unique_users if unique_users else 0,
+
+                # Buckets for pricing --------------------------------------
+                'stables_small_tx' : len(small_wdr),
+                'stables_large_tx' : len(large_wdr),
             })
             
-            # 9-10) Cash deposit
+            # 9-10) Cash deposit / withdraw --------------------------------
             cash_dep = group_data[(group_data['activity_type'] == 'cash_load') & (group_data['signed_amount'] > 0)]
             cash_wdr = group_data[(group_data['activity_type'] == 'cash_load') & (group_data['signed_amount'] < 0)]
             
@@ -140,9 +165,8 @@ class GroupMetricsCalculator:
                 'cash_withdraw_promedio_usuario'  : abs(cash_wdr['signed_amount'].sum()) / unique_users if unique_users else 0,
             })
             
-            # 11-12) Virtual deposit
-            fiat_mask = group_data['activity_type'].isin(
-                ['virtual_deposit', 'bank_transfer', 'international_transfer'])
+            # 11-12) Fiat rails (virtual/bank/int transfer) ----------------
+            fiat_mask = group_data['activity_type'].isin(['virtual_deposit', 'bank_transfer', 'international_transfer'])
             fiat_dep = group_data[fiat_mask & (group_data['signed_amount'] > 0)]
             fiat_wdr = group_data[fiat_mask & (group_data['signed_amount'] < 0)]
             
@@ -154,6 +178,10 @@ class GroupMetricsCalculator:
                 'fiat_withdraw_tx_cantidad'       : len(fiat_wdr),
                 'fiat_withdraw_valor_tx_promedio' : abs(fiat_wdr['amount'].mean()) if len(fiat_wdr) else 0,
                 'fiat_withdraw_promedio_usuario'  : abs(fiat_wdr['signed_amount'].sum()) / unique_users if unique_users else 0,
+
+                # Counts for free tx logic --------------------------------
+                'users_with_fiat_dep'   : fiat_dep['user_id'].nunique(),
+                'users_with_crypto_wdr': wdr['user_id'].nunique(),
             })
             
             # Agregar a la lista
@@ -225,6 +253,11 @@ class GroupMetricsCalculator:
             'cash_withdraw_tx_cantidad', 'cash_withdraw_valor_tx_promedio', 'cash_withdraw_promedio_usuario',
             'fiat_deposit_tx_cantidad',  'fiat_deposit_valor_tx_promedio',  'fiat_deposit_promedio_usuario',
             'fiat_withdraw_tx_cantidad', 'fiat_withdraw_valor_tx_promedio', 'fiat_withdraw_promedio_usuario',
+            # Card ATM/POS
+            'atm_tx_cantidad', 'atm_valor_tx_promedio', 'atm_promedio_usuario',
+            'pos_tx_cantidad', 'pos_valor_tx_promedio', 'pos_promedio_usuario',
+            # New columns
+            'users_with_fiat_dep', 'users_with_crypto_wdr',
         ]
         
         # Asegurar que todas las columnas existen

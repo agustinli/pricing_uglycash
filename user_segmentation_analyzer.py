@@ -64,6 +64,8 @@ class UserSegmentationAnalyzer:
         """Carga datos y aplica reglas de balance."""
         # Cargar transacciones
         self.df = pd.read_csv(self.transactions_file, parse_dates=['created_at'])
+        # Asegurar que amount sea numérico (puede venir como string)
+        self.df['amount'] = pd.to_numeric(self.df['amount'], errors='coerce').fillna(0)
         print(f"✓ Cargadas {len(self.df):,} transacciones")
         
         # Inicializar procesador de reglas
@@ -272,7 +274,7 @@ class UserSegmentationAnalyzer:
         
     def _generate_visualizations(self, output_dir: str):
         """Genera gráficos del análisis."""
-        plt.style.use('seaborn-v0_8-darkgrid')
+        plt.style.use('seaborn-darkgrid')
         
         # 1. Heatmap de segmentos
         self._plot_segment_heatmap(output_dir)

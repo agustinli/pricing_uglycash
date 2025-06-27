@@ -96,36 +96,60 @@ class MonthlyUserSegmentation:
         
     def calculate_monthly_card_spending(self) -> pd.DataFrame:
         """
-        Calcula el gasto mensual con tarjeta de cada usuario.
-        
-        Returns:
-            DataFrame con user_id, year_month, total_card_spending
+        Calcula el gasto mensual total (tarjeta + investment) de cada usuario.
         """
-        print("Calculando gastos mensuales con tarjeta...")
-        
-        # Filtrar gastos de tarjeta (hold_captured o debit)
-        card_spending = self.df[
-            (self.df['activity_type'] == 'card') &
+        print("Calculando gastos mensuales (tarjeta + investment)...")
+
+        # --- 1. Gasto con tarjeta -------------------------------------------
+        card = self.df[
+            (self.df['activity_type'].isin(['card','card_POS','card_ATM'])) &
             (self.df['side'].isin(['hold_captured', 'debit'])) &
             (self.df['status'] == 'settled') &
             (self.df['currency'] == 'eUSD')
         ].copy()
-        
-        # Agregar year_month
-        card_spending['year_month'] = card_spending['created_at'].dt.to_period('M')
-        
-        # Agrupar por usuario y mes
-        monthly_card_spending = card_spending.groupby(['user_id', 'year_month']).agg({
-            'amount': lambda x: abs(x.sum()),  # Suma absoluta de gastos
-            'created_at': 'count'  # Contar transacciones
-        }).reset_index()
-        
-        monthly_card_spending.columns = ['user_id', 'year_month', 'total_card_spending', 'card_tx_count']
-        
-        self.monthly_card_spending = monthly_card_spending
-        print(f"✓ Calculados gastos para {len(self.monthly_card_spending)} usuario-meses")
-        
-        return self.monthly_card_spending
+        card['year_month'] = card['created_at'].dt.to_period('M')
+
+        card_monthly = (card
+            .groupby(['user_id', 'year_month'])
+            .agg(total_card_spending=('amount', lambda x: abs(x.sum())),
+                 card_tx_count      =('amount', 'count'))
+            .reset_index())
+
+        # --- 2. Gasto por investment (buy y sell) ----------------------------
+        inv = self.df[
+            (self.df['activity_type'] == 'crypto_investment') &
+            (self.df['status'] == 'settled') &
+            (self.df['currency'] == 'eUSD')
+        ].copy()
+        inv['year_month'] = inv['created_at'].dt.to_period('M')
+
+        inv_monthly = (inv
+            .groupby(['user_id', 'year_month'])
+            .agg(total_invest_spending=('signed_amount', lambda x: abs(x.sum())),
+                 invest_tx_count      =('signed_amount', 'count'))
+            .reset_index())
+
+        # --- 3. Combinar y sumar --------------------------------------------
+        spend = (card_monthly
+                 .merge(inv_monthly, on=['user_id', 'year_month'], how='outer')
+                 .fillna(0))
+
+        # gasto total = tarjeta + investment
+        spend['total_card_spending'] = (
+            spend['total_card_spending'] + spend['total_invest_spending']
+        )
+        spend['card_tx_count'] = (
+            spend['card_tx_count'] + spend['invest_tx_count']
+        )
+
+        # Mantener solo las columnas originales que usa el resto del código
+        spend = spend[['user_id', 'year_month',
+                       'total_card_spending', 'card_tx_count']]
+
+        self.monthly_card_spending = spend
+        print(f"✓ Calculados gastos para {len(spend)} usuario-meses")
+
+        return spend
         
     def segment_users_monthly(self) -> pd.DataFrame:
         """

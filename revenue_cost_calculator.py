@@ -14,6 +14,7 @@ CAC: 25 USD por usuario activo mensual (opcional, si se provee active_users_mont
 
 from typing import Optional, Dict
 import pandas as pd
+import numpy as np
 
 
 # --- Default parameters (monthly rates unless noted) -----------------
@@ -22,19 +23,30 @@ DEFAULT_PARAMS: Dict[str, float] = {
     'earn_rev_pct': 0.00307,  # derived from 3.75% APY
     'earn_cost_pct': 0.00327,  # derived from 4% APY
 
-    # Card
-    'card_rev_pct': 0.0171,
-    'card_fx_pct': 0.01,
-    'card_cost_pct': 0.00447,
-    'card_per_tx_fee': 0.289,
+    # ---- Global Card Params (affect POS & ATM) ----
+    'fx_fee_pct': 0.01,                 # fee % applied to FX volume (revenue side)
+    'fx_volume_share': 0.50,            # share of volume with FX
+    'cross_border_fee_pct': 0.005,      # fee % applied to cross-border volume (revenue side)
+    'cross_border_volume_share': 0.20,  # share of volume that is cross-border
+
+    # ISA (interchange settlement add-on)
+    'isa_cost_pct': 0.01,   # % sobre volumen sujeto a ISA
+    'isa_volume_pct': 0.50, # % del volumen de tarjeta expuesto a ISA
+
+    # ---- Card POS specific ----
+    'pos_rev_pct': 0.0171,
+    'pos_processing_cost_pct': 0.00447,
+    'pos_per_tx_fee': 0.289,
 
     # Investment
     'invest_rev_pct': 0.01,
     'invest_cost_pct': 0.0022,
 
-    # Stables
-    'stables_rev_per_tx': 3.0,
-    'stables_cost_per_tx': 0.33,
+    # Stables (variable fee)
+    'stables_low_fee': 1.0,      # fee for withdrawals <= threshold
+    'stables_high_fee': 2.0,     # fee for withdrawals > threshold
+    'stables_threshold': 100.0,   # amount threshold in USD
+    'stables_cost_per_tx': 0.85,  # cost remains fixed
 
     # Fiat on/off
     'fiat_rev_per_tx': 1.0,
@@ -47,7 +59,17 @@ DEFAULT_PARAMS: Dict[str, float] = {
     'rails_maintenance_per_user': 1.0,
 
     # CAC
-    'cac_per_user': 25.0,
+    'cac_per_user': 0.0,
+
+    # Free-tx flags
+    'free_first_fiat_dep': False,
+    'free_first_crypto_wdr': False,
+
+    # ATM specific
+    'atm_fixed_rev': 1.0,
+    'atm_var_rev_pct': 0.015,
+    'atm_fixed_cost': 1.1,
+    'atm_var_cost_pct': 0.0075,
 }
 
 
@@ -121,38 +143,122 @@ class RevenueCostCalculator:
             df['fiat_withdraw_tx_cantidad'] * df['fiat_withdraw_valor_tx_promedio']
         )
 
+        # Split POS and ATM volumes from group_metrics
+        df['pos_volume'] = df.get('pos_tx_cantidad', 0) * df.get('pos_valor_tx_promedio', 0)
+        df['atm_volume'] = df.get('atm_tx_cantidad', 0) * df.get('atm_valor_tx_promedio', 0)
+
+        # --- Global volume slices --------------------------------------
+        isa_volume_pos  = self.params['isa_volume_pct']            * df['pos_volume']
+        isa_volume_atm  = self.params['isa_volume_pct']            * df['atm_volume']
+
+        fx_pos_vol      = self.params['fx_volume_share']           * df['pos_volume']
+        fx_atm_vol      = self.params['fx_volume_share']           * df['atm_volume']
+
+        cb_pos_vol      = self.params['cross_border_volume_share'] * df['pos_volume']
+        cb_atm_vol      = self.params['cross_border_volume_share'] * df['atm_volume']
+
         # 1. Earn --------------------------------------------------------
         df['earn_revenue'] = self.params['earn_rev_pct'] * df['balance_total']
         df['earn_cost'] = self.params['earn_cost_pct'] * df['balance_total']
 
         # 2. Card --------------------------------------------------------
-        fx_volume = 0.5 * df['card_volume']  # asumimos 50 % lleva FX
-        df['card_revenue'] = (
-            self.params['card_rev_pct'] * df['card_volume'] +
-            self.params['card_fx_pct'] * fx_volume
+        # ---------------- POS ----------------------------------------
+        df['card_pos_revenue'] = (
+            self.params['pos_rev_pct']          * df['pos_volume'] +
+            self.params['fx_fee_pct']           * fx_pos_vol +
+            self.params['cross_border_fee_pct'] * cb_pos_vol
         )
-        df['card_cost'] = (
-            self.params['card_cost_pct'] * df['card_volume'] +
-            self.params['card_fx_pct'] * fx_volume +
-            self.params['card_per_tx_fee'] * df['tarjeta_tx_cantidad']
+
+        df['card_pos_cost'] = (
+            self.params['pos_processing_cost_pct'] * df['pos_volume'] +
+            self.params['pos_per_tx_fee']          * df.get('pos_tx_cantidad', 0) +
+            self.params['isa_cost_pct']            * isa_volume_pos
         )
+
+        # ---------------- ATM ----------------------------------------
+        df['card_atm_revenue'] = (
+            self.params['atm_fixed_rev'] * df.get('atm_tx_cantidad', 0) +
+            self.params['atm_var_rev_pct'] * df['atm_volume'] +
+            self.params['fx_fee_pct']           * fx_atm_vol +
+            self.params['cross_border_fee_pct'] * cb_atm_vol
+        )
+
+        df['card_atm_cost'] = (
+            self.params['atm_fixed_cost'] * df.get('atm_tx_cantidad', 0) +
+            self.params['atm_var_cost_pct'] * df['atm_volume'] +
+            self.params['isa_cost_pct']     * isa_volume_atm
+        )
+
+        # For backward compatibility keep combined card metrics
+        df['card_volume'] = df['pos_volume'] + df['atm_volume']
+        isa_volume = isa_volume_pos + isa_volume_atm
+        fx_volume = fx_pos_vol + fx_atm_vol
+        df['card_revenue'] = df['card_pos_revenue'] + df['card_atm_revenue']
+        df['card_cost'] = df['card_pos_cost'] + df['card_atm_cost']
 
         # 3. Investment --------------------------------------------------
         df['investment_revenue'] = self.params['invest_rev_pct'] * df['investment_volume']
         df['investment_cost'] = self.params['invest_cost_pct'] * df['investment_volume']
 
-        # 4. Stables (retiros crypto) -----------------------------------
-        df['stables_revenue'] = self.params['stables_rev_per_tx'] * df['crypto_withdraw_tx_cantidad']
-        df['stables_cost'] = self.params['stables_cost_per_tx'] * df['crypto_withdraw_tx_cantidad']
+        # 4. Stables (crypto withdrawal) -----------------------------------
+        free_wdr = self.params.get('free_first_crypto_wdr', False)
+        if free_wdr:
+            if 'users_with_crypto_wdr' in df.columns:
+                free_wdr_count = df['users_with_crypto_wdr']
+            else:
+                # Fallback: estimar usuarios con retiro = min(tx_cantidad, usuarios_grupo)
+                free_wdr_count = df[['crypto_withdraw_tx_cantidad', 'usuarios_grupo']].min(axis=1)
+        else:
+            free_wdr_count = 0
+
+        low_fee = self.params['stables_low_fee']
+        high_fee = self.params['stables_high_fee']
+
+        if {'stables_small_tx', 'stables_large_tx'}.issubset(df.columns):
+            small = df['stables_small_tx']
+            large = df['stables_large_tx']
+
+            # Distribuir la exención de primera transacción sobre small primero
+            free_small = np.minimum(free_wdr_count, small)
+            free_large = free_wdr_count - free_small
+            free_large = np.minimum(free_large, large)
+
+            df['stables_revenue'] = (
+                low_fee  * (small - free_small) +
+                high_fee * (large - free_large)
+            )
+
+            total_tx = small + large
+        else:
+            # Fallback a aproximación promedio (caso legacy)
+            fee_per_tx = np.where(df['crypto_withdraw_valor_tx_promedio'] <= 100, low_fee, high_fee)
+            df['stables_revenue'] = fee_per_tx * (df['crypto_withdraw_tx_cantidad'] - free_wdr_count)
+            total_tx = df['crypto_withdraw_tx_cantidad']
+
+        # Costos (uno por transacción, gratis la primera si flag activo)
+        df['stables_cost'] = (
+            self.params['stables_cost_per_tx'] * (total_tx - free_wdr_count)
+        )
 
         # 5. Fiat on/off -------------------------------------------------
+        # ---------------- Free first fiat deposit --------------------
+        free_dep = self.params.get('free_first_fiat_dep', False)
+        if free_dep:
+            if 'users_with_fiat_dep' in df.columns:
+                free_dep_count = df['users_with_fiat_dep']
+            else:
+                free_dep_count = df[['fiat_deposit_tx_cantidad', 'usuarios_grupo']].min(axis=1)
+        else:
+            free_dep_count = 0
+
         df['fiat_revenue'] = (
             self.params['fiat_rev_per_tx'] * df['cash_deposit_tx_cantidad'] +
             self.params['fiat_rev_per_tx'] * df['cash_withdraw_tx_cantidad'] +
             self.params['fiat_rev_per_tx'] * df['fiat_deposit_tx_cantidad'] +
             self.params['fiat_rev_per_tx'] * df['fiat_withdraw_tx_cantidad'] +
             self.params['fiat_rev_withdraw_pct'] * df['fiat_withdraw_volume']
-        )
+        ) - free_dep_count * self.params['fiat_rev_per_tx']
+
         df['fiat_cost'] = (
             self.params['fiat_cost_cash_dep'] * df['cash_deposit_tx_cantidad'] +
             self.params['fiat_cost_cash_wdr'] * df['cash_withdraw_tx_cantidad'] +
@@ -160,17 +266,32 @@ class RevenueCostCalculator:
             self.params['fiat_cost_fiat_wdr'] * df['fiat_withdraw_tx_cantidad'] +
             self.params['fiat_cost_per_volume'] * df['fiat_deposit_volume'] +
             self.params['fiat_cost_per_volume'] * df['fiat_withdraw_volume'] +
-            self.params['rails_maintenance_per_user'] * df['usuarios_grupo']  # mantenimiento rails
-        )
+            self.params['rails_maintenance_per_user'] * df['usuarios_grupo']
+        ) - free_dep_count * self.params['fiat_cost_fiat_dep']
 
         # Transformar a formato largo -----------------------------------
         product_dfs = []
-        for prod in ['earn', 'card', 'investment', 'stables', 'fiat']:
-            product_dfs.append(
-                df[['year_month', 'segment', f'{prod}_revenue', f'{prod}_cost']]
-                  .rename(columns={f'{prod}_revenue': 'revenue', f'{prod}_cost': 'cost'})
-                  .assign(product=prod)
-            )
+        for prod in ['earn', 'card_pos', 'card_atm', 'investment', 'stables', 'fiat']:
+            if prod == 'card_pos':
+                revenue_col = 'card_pos_revenue'
+                cost_col = 'card_pos_cost'
+            elif prod == 'card_atm':
+                revenue_col = 'card_atm_revenue'
+                cost_col = 'card_atm_cost'
+            elif prod == 'card':
+                # deprecated combined
+                revenue_col = 'card_revenue'
+                cost_col = 'card_cost'
+            else:
+                revenue_col = f'{prod}_revenue'
+                cost_col = f'{prod}_cost'
+
+            if revenue_col in df.columns:
+                product_dfs.append(
+                    df[['year_month', 'segment', revenue_col, cost_col]]
+                      .rename(columns={revenue_col: 'revenue', cost_col: 'cost'})
+                      .assign(product=prod)
+                )
 
         product_df = pd.concat(product_dfs, ignore_index=True)
         product_df = product_df[['year_month', 'segment', 'product', 'revenue', 'cost']]

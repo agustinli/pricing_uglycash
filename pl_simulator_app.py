@@ -105,6 +105,17 @@ def main():
 
     # --- Product parameter groups ------------------------------------
     product_groups = {
+        'Card – global': {
+            'color': '#8a8a8a',
+            'fields': {
+                'fx_fee_pct':               ('FX fee % of volume', 'pct'),
+                'fx_volume_share':          ('FX volume share (%)', 'pct'),
+                'cross_border_fee_pct':     ('Cross-border fee % volume', 'pct'),
+                'cross_border_volume_share':('Cross-border volume share (%)', 'pct'),
+                'isa_cost_pct':             ('ISA cost % of ISA volume', 'pct'),
+                'isa_volume_pct':           ('% of card volume under ISA', 'pct'),
+            }
+        },
         'Earn': {
             'color': '#FF8C00',
             'fields': {
@@ -112,13 +123,21 @@ def main():
                 'earn_cost_pct': ('Cost APY (%)', 'apy'),
             }
         },
-        'Card': {
+        'Card POS': {
             'color': '#1f77b4',
             'fields': {
-                'card_rev_pct': ('Revenue % of volume', 'pct'),
-                'card_fx_pct': ('FX share % of volume', 'pct'),
-                'card_cost_pct': ('Processing cost % of volume', 'pct'),
-                'card_per_tx_fee': ('Fixed fee per tx (USD)', 'usd'),
+                'pos_rev_pct': ('Revenue % of volume', 'pct'),
+                'pos_processing_cost_pct': ('Processing cost % of volume', 'pct'),
+                'pos_per_tx_fee': ('Fixed fee per tx (USD)', 'usd'),
+            }
+        },
+        'Card ATM': {
+            'color': '#17becf',
+            'fields': {
+                'atm_fixed_rev': ('Fixed revenue per tx (USD)', 'usd'),
+                'atm_var_rev_pct': ('Variable revenue % of volume', 'pct'),
+                'atm_fixed_cost': ('Fixed cost per tx (USD)', 'usd'),
+                'atm_var_cost_pct': ('Variable cost % of volume', 'pct'),
             }
         },
         'Investment': {
@@ -131,7 +150,9 @@ def main():
         'Stables': {
             'color': '#d62728',
             'fields': {
-                'stables_rev_per_tx': ('Revenue per withdrawal (USD)', 'usd'),
+                'stables_low_fee': ('Low fee per withdrawal (USD)', 'usd'),
+                'stables_high_fee': ('High fee per withdrawal (USD)', 'usd'),
+                'stables_threshold': ('Threshold amount for high fee (USD)', 'usd'),
                 'stables_cost_per_tx': ('Cost per withdrawal (USD)', 'usd'),
             }
         },
@@ -167,17 +188,22 @@ def main():
                 default = default_params[key]
                 if kind == 'apy':
                     default_apy = (1 + default) ** 12 - 1
-                    apy_val = st.number_input(label, value=round(default_apy * 100, 4), step=0.01, format="%0.2f")
+                    apy_val = st.number_input(label, value=round(default_apy * 100, 4), step=0.01, format="%0.2f", key=f"{product}_{key}")
                     params[key] = (1 + apy_val / 100) ** (1/12) - 1
                 elif kind == 'pct':
-                    val_pct = st.number_input(label, value=round(default * 100, 4), step=0.01, format="%0.2f")
+                    val_pct = st.number_input(label, value=round(default * 100, 4), step=0.01, format="%0.2f", key=f"{product}_{key}")
                     params[key] = val_pct / 100
                 else:
-                    params[key] = st.number_input(label, value=default, step=0.01)
+                    params[key] = st.number_input(label, value=default, step=0.01, key=f"{product}_{key}")
 
     # CAC separately ---------------------------------------------------
     with st.sidebar.expander('Customer Acquisition Cost (CAC)'):
-        params['cac_per_user'] = st.number_input('CAC per new active user (USD)', value=default_params['cac_per_user'], step=1.0)
+        params['cac_per_user'] = st.number_input('CAC per new active user (USD)', value=0.0, step=1.0)
+
+    # Free Tx options ---------------------------------------------------
+    with st.sidebar.expander('Free transactions'):
+        params['free_first_fiat_dep'] = st.checkbox('First fiat deposit free', value=default_params['free_first_fiat_dep'])
+        params['free_first_crypto_wdr'] = st.checkbox('First crypto withdrawal free', value=default_params['free_first_crypto_wdr'])
 
     # Tier parameters --------------------------------------------------
     if enable_tiers:
@@ -203,7 +229,7 @@ def main():
     # Growth assumptions ----------------------------------------------
     st.sidebar.header('Growth projection')
     growth_rate = st.sidebar.slider('Monthly growth rate after Jun-2025 (%)', 0.0, 20.0, 16.0, 0.5) / 100.0
-    proj_months = st.sidebar.slider('Months to project', 0, 36, 30, 1)
+    proj_months = st.sidebar.slider('Months to project', 0, 36, 5, 1)
 
     # Extra param: RSR price -----------------------------------------
     st.sidebar.header('RSR token')
@@ -247,7 +273,7 @@ def main():
             product_df = pd.concat([product_df, rsr_df[['year_month','segment','product','revenue','cost']]], ignore_index=True)
 
     # Proyección futura -------------------------------------------------------
-    if proj_months > 0 and growth_rate > 0:
+    if proj_months > 0:
         last_month = cutoff_month
         product_df = project_growth(product_df, last_month, growth_rate, proj_months)
 
@@ -256,7 +282,7 @@ def main():
 
     # Recalcular activo usuarios proyectado ----------------------------------
     active_df = data['active_users'].copy()
-    if proj_months > 0 and growth_rate > 0:
+    if proj_months > 0:
         last_active = active_df.iloc[-1].copy()
         last_period = pd.Period(last_active['year_month'])
         proj_rows = []
@@ -295,8 +321,12 @@ def main():
     pl_df.rename(columns={'pl':'Monthly P&L','arr':'Annualized P&L'}, inplace=True)
     pl_df = pl_df[['year_month','revenue','cost','cac_cost','total_cost','Monthly P&L','Annualized P&L']]
 
-    # Color mapping for products --------------------------------------
-    color_map = {p.lower(): cfg['color'] for p, cfg in product_groups.items()}
+    # Color map --------------------------------------------------------------
+    def _norm(prod: str) -> str:
+        """Normalize product key to match product_df codes (lower + underscores)."""
+        return prod.lower().replace(' ', '_')
+
+    color_map = {_norm(p): cfg['color'] for p, cfg in product_groups.items()}
 
     # 4. Visualizaciones ------------------------------------------------------
     st.header('Revenue by product')
@@ -321,7 +351,7 @@ def main():
     # -----------------------------------------------------------------
     # 3.a  Project tier counts beyond historical months ----------------
     # -----------------------------------------------------------------
-    if enable_tiers and tier_counts_df is not None and proj_months > 0 and growth_rate > 0:
+    if enable_tiers and tier_counts_df is not None and proj_months > 0:
         last_real_month = tier_counts_df['year_month'].max()
         base_counts = tier_counts_df[tier_counts_df['year_month'] == last_real_month].copy()
         base_counts = base_counts[base_counts['tier'] != 'tier1']
