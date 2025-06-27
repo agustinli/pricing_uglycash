@@ -4,3 +4,6 @@ segmentation_outputs/*.csv
 olympus_all_txs*.csv
 tribe.csv
 segmentation_outputs*/
+
+__pycache__/
+*.pyc
