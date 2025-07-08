@@ -156,6 +156,12 @@ def main():
                 'stables_cost_per_tx': ('Cost per withdrawal (USD)', 'usd'),
             }
         },
+        'Crypto deposit': {
+            'color': '#ff1493',
+            'fields': {
+                'crypto_deposit_cost_per_tx': ('Cost per deposit (USD)', 'usd'),
+            }
+        },
         'Fiat': {
             'color': '#2ca02c',
             'fields': {

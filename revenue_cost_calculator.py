@@ -70,6 +70,9 @@ DEFAULT_PARAMS: Dict[str, float] = {
     'atm_var_rev_pct': 0.015,
     'atm_fixed_cost': 1.1,
     'atm_var_cost_pct': 0.0075,
+
+    # Crypto deposit (no revenue, only cost)
+    'crypto_deposit_cost_per_tx': 0.85,
 }
 
 
@@ -269,9 +272,19 @@ class RevenueCostCalculator:
             self.params['rails_maintenance_per_user'] * df['usuarios_grupo']
         ) - free_dep_count * self.params['fiat_cost_fiat_dep']
 
+        # 6. Crypto deposit (cost only) ----------------------------------
+        if 'crypto_deposit_tx_cantidad' in df.columns:
+            df['crypto_deposit_revenue'] = 0.0
+            df['crypto_deposit_cost'] = (
+                self.params['crypto_deposit_cost_per_tx'] * df['crypto_deposit_tx_cantidad']
+            )
+        else:
+            df['crypto_deposit_revenue'] = 0.0
+            df['crypto_deposit_cost'] = 0.0
+
         # Transformar a formato largo -----------------------------------
         product_dfs = []
-        for prod in ['earn', 'card_pos', 'card_atm', 'investment', 'stables', 'fiat']:
+        for prod in ['earn', 'card_pos', 'card_atm', 'investment', 'stables', 'crypto_deposit', 'fiat']:
             if prod == 'card_pos':
                 revenue_col = 'card_pos_revenue'
                 cost_col = 'card_pos_cost'
